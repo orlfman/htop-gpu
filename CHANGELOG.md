@@ -3,6 +3,24 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Claude Code (Claude Opus 5.5): fan meter
+
+- **User's request:** fan speed, aware of the card's zero RPM mode.
+- **`src/htop` commit `546413b7`** (`linux: add AMD GPU fan meter`): sampler
+  reads `fan1_max` with the one-time values and `fan1_input` every refresh;
+  new `AMDGPUFan` meter (`Fan`, bar, `GPU_ENGINE_2` color): `Fan:1193RPM
+  max:3200RPM`, and `Fan:0RPM (stopped)` / bar text `stopped` at 0 RPM. The
+  start temperature of zero RPM mode is only exposed with overdrive on
+  (`gpu_od/fan_ctrl`), which stays off.
+- **Tests:** `test-sampler.py` checks fan values in every case plus spinning,
+  `fan1_input` missing, `fan1_max` missing, and a live 0..max plausibility
+  check. On the ASan build: live `stopped`, fake 1193 RPM (bar 37%), missing →
+  `N/A`, suspended → `sleep`, LED renders; no sanitizer reports.
+- **Package 3.5.3-4** (6 patches), installed (user typed sudo). Fan added after
+  VCN in `~/.config/htop-gpu/htop-gpurc` (backup `htop-gpurc.bak-2026-10-28`).
+- **Checks:** build clean, `STYLE OK`, sampler and config-path suites
+  `ALL PASSED`. Not yet seen live: the fan spinning (needs a game).
+
 ## 2026-10-28, user + Claude Code (Claude Opus 5.5): game-load check
 
 - The user ran `htop-gpu` 3.5.3-3 next to Dune: Awakening with MangoHud; the

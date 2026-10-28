@@ -7,7 +7,7 @@
 
 pkgname=htop-gpu
 pkgver=3.5.3
-pkgrel=3
+pkgrel=4
 pkgdesc='Interactive process viewer with AMD RX 9070 XT GPU meters, alongside stock htop'
 arch=('x86_64')
 url='https://github.com/orlfman/htop'
@@ -26,15 +26,17 @@ _patches=(
   0003-linux-add-AMD-GPU-temperature-and-clock-meters.patch
   0004-linux-add-AMD-GPU-video-engine-meter.patch
   0005-Settings-give-htop-gpu-its-own-configuration-file.patch
+  0006-linux-add-AMD-GPU-fan-meter.patch
 )
 source=("git+https://github.com/htop-dev/htop.git#tag=${pkgver}"
         "${_patches[@]}")
 sha256sums=('a4619a140f8374c526d27cf5f892b2dceaee27b33a0446d902c35962a5159850'
-            '9b0e771d0d6e41bb38a3a959594d287add9107dceb184f2dc26b1a4d0b4b43bd'
-            '8e1a18a6e0e2037938dd2ab6bbd14692521644b6946f001c7c37cd4751f3ebf2'
-            '10e37f78f54d1cf3ba4ebf3477bd106f72246dd6bfa7731a3ff9366b09263bae'
-            'eff79efe6ea0f71d71af26cb81030570ab9a60f633186ba393efd26eb7874bb0'
-            '9911ac280645c0e39e1d9eeac5f17344a4e167c5bfaf16479bd63b26fe5c5083')
+            '4df7f5eae39821cca1aaa4d437ec910a30754977e9ac67e82caa881d90c14bd0'
+            'cd30187b13b2bf2671e361ea7101060cf4ec9bc7d5b3b2e837e7ae2d80bb4394'
+            '6bf16be0fe6c9dfb0ae8df8e02b34d82151615925fbc5128e906e209d658a74c'
+            'd9d65d7484a6587eea2adbd70c606d42f6db6946b7131604869c06e75859e47e'
+            'f236118afc7c53b864851ec4b13947c8b78685c930ae47f681dc7bd0c7333d97'
+            '18c9c18853e7b9e299596b8d529afc1f77335094909124d8c489b3945c808271')
 
 prepare() {
   cd htop

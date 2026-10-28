@@ -1,0 +1,183 @@
+From 546413b78d0f298ae895053c1bc60d7f3dc00965 Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 16:53:25 -0700
+Subject: [PATCH 6/6] linux: add AMD GPU fan meter
+
+Add AMDGPUFan ("Fan:1193RPM max:3200RPM"), the RX 9070 XT's fan speed
+from hwmon fan1_input against fan1_max, as a bar by default. The card
+keeps its fan stopped until it warms up (zero RPM mode), so 0 RPM is
+shown as "stopped" rather than as a missing value.
+
+The sampler reads fan1_max with the other values that do not change
+while the card is up, and fan1_input on every refresh. amdgpu exposes
+one fan input without a label, so it is read as fan1 directly.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ linux/AMDGPU.c      |  7 ++++++
+ linux/AMDGPU.h      |  3 +++
+ linux/AMDGPUMeter.c | 55 +++++++++++++++++++++++++++++++++++++++++++++
+ linux/AMDGPUMeter.h |  2 ++
+ linux/Platform.c    |  1 +
+ 5 files changed, 68 insertions(+)
+
+diff --git a/linux/AMDGPU.c b/linux/AMDGPU.c
+index 150fc6e6..0432232e 100644
+--- a/linux/AMDGPU.c
++++ b/linux/AMDGPU.c
+@@ -243,6 +243,7 @@ static void AMDGPU_clearValues(void) {
+    sample.memRate = NAN;
+    sample.vclk = NAN;
+    sample.dclk = NAN;
++   sample.fan = NAN;
+ }
+ 
+ /* Back to "no card": every value and everything found about the card is dropped */
+@@ -254,6 +255,7 @@ static void AMDGPU_forget(void) {
+    sample.vramTotal = NAN;
+    sample.sclkPeak = NAN;
+    sample.mclkMax = NAN;
++   sample.fanMax = NAN;
+    for (size_t i = 0; i < AMDGPU_TEMP_COUNT; i++)
+       sample.tempCrit[i] = NAN;
+ 
+@@ -280,6 +282,7 @@ static void AMDGPU_init(void) {
+ static bool AMDGPU_readStatic(void) {
+    sample.vramTotal = AMDGPU_readNumber(deviceDir, "mem_info_vram_total") / 1024.0;
+    sample.mclkMax = AMDGPU_readMclkMax();
++   sample.fanMax = NAN;
+    for (size_t i = 0; i < AMDGPU_TEMP_COUNT; i++)
+       sample.tempCrit[i] = NAN;
+ 
+@@ -294,6 +297,9 @@ static bool AMDGPU_readStatic(void) {
+    }
+    sclkIndex = AMDGPU_findLabel("freq", "sclk");
+    mclkIndex = AMDGPU_findLabel("freq", "mclk");
++
++   /* amdgpu has one fan input and gives it no label */
++   sample.fanMax = AMDGPU_readNumber(hwmonDir, "fan1_max");
+    return true;
+ }
+ 
+@@ -336,6 +342,7 @@ static void AMDGPU_refresh(void) {
+ 
+       sample.sclk = AMDGPU_readHwmon("freq", sclkIndex, "input") / 1000000.0;
+       sample.mclk = AMDGPU_readHwmon("freq", mclkIndex, "input") / 1000000.0;
++      sample.fan = AMDGPU_readNumber(hwmonDir, "fan1_input");
+    }
+ 
+    if (sample.sclk > sample.sclkPeak)
+diff --git a/linux/AMDGPU.h b/linux/AMDGPU.h
+index e23e3c3a..c92c0459 100644
+--- a/linux/AMDGPU.h
++++ b/linux/AMDGPU.h
+@@ -56,6 +56,9 @@ typedef struct AMDGPUSample_ {
+    double memRate;                        /* Gbps per pin */
+    double vclk;                           /* MHz */
+    double dclk;                           /* MHz */
++
++   double fan;                            /* RPM, 0 while stopped (zero RPM mode) */
++   double fanMax;                         /* RPM */
+ } AMDGPUSample;
+ 
+ /* Sysfs is read at most once per monotonicMs value, so all AMDGPU meters share one read per refresh */
+diff --git a/linux/AMDGPUMeter.c b/linux/AMDGPUMeter.c
+index 4e362e8e..9440cd83 100644
+--- a/linux/AMDGPUMeter.c
++++ b/linux/AMDGPUMeter.c
+@@ -60,6 +60,10 @@ static const int AMDGPUVideoMeter_attributes[] = {
+    GPU_ENGINE_4,
+ };
+ 
++static const int AMDGPUFanMeter_attributes[] = {
++   GPU_ENGINE_2,
++};
++
+ static const char* const AMDGPUTempMeter_labels[AMDGPU_TEMP_COUNT] = {
+    [AMDGPU_TEMP_EDGE]     = "edge:",
+    [AMDGPU_TEMP_JUNCTION] = "junction:",
+@@ -300,6 +304,38 @@ static void AMDGPUVideoMeter_display(const Object* cast, RichString* out) {
+    AMDGPUVideoMeter_appendClock(out, " dclk:", sample->dclk);
+ }
+ 
++/* 0 RPM is normal: the fan stays stopped until the card warms up (zero RPM mode) */
++static void AMDGPUFanMeter_updateValues(Meter* this) {
++   const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
++   if (AMDGPUMeter_isUnavailable(this, sample, sample->fan, sample->fanMax))
++      return;
++
++   this->values[0] = sample->fan;
++   this->total = sample->fanMax;
++   if (isPositive(this->values[0]))
++      xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%.0fRPM", this->values[0]);
++   else
++      xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "stopped");
++}
++
++static void AMDGPUFanMeter_display(const Object* cast, RichString* out) {
++   const Meter* this = (const Meter*)cast;
++   if (!AMDGPUMeter_displayStart(this, out))
++      return;
++
++   char buffer[50];
++   xSnprintf(buffer, sizeof(buffer), "%.0fRPM", this->values[0]);
++   RichString_appendAscii(out, CRT_colors[METER_VALUE], buffer);
++   if (!isPositive(this->values[0])) {
++      RichString_appendAscii(out, CRT_colors[METER_TEXT], " (stopped)");
++      return;
++   }
++
++   xSnprintf(buffer, sizeof(buffer), "%.0fRPM", this->total);
++   RichString_appendAscii(out, CRT_colors[METER_TEXT], " max:");
++   RichString_appendAscii(out, CRT_colors[METER_VALUE], buffer);
++}
++
+ const MeterClass AMDGPUUsageMeter_class = {
+    .super = {
+       .extends = Class(Meter),
+@@ -432,3 +468,22 @@ const MeterClass AMDGPUVideoMeter_class = {
+    .caption = "VCN",
+    .description = "AMD GPU video engine (encode and decode) busy percentage and clocks"
+ };
++
++const MeterClass AMDGPUFanMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++      .display = AMDGPUFanMeter_display,
++   },
++   .updateValues = AMDGPUFanMeter_updateValues,
++   .defaultMode = BAR_METERMODE,
++   .supportedModes = METERMODE_DEFAULT_SUPPORTED,
++   .maxItems = 1,
++   .isPercentChart = true,
++   .total = 100.0,
++   .attributes = AMDGPUFanMeter_attributes,
++   .name = "AMDGPUFan",
++   .uiName = "AMD GPU fan",
++   .caption = "Fan",
++   .description = "AMD GPU fan speed (stopped in zero RPM mode)"
++};
+diff --git a/linux/AMDGPUMeter.h b/linux/AMDGPUMeter.h
+index 7992c4be..6c8bc36a 100644
+--- a/linux/AMDGPUMeter.h
++++ b/linux/AMDGPUMeter.h
+@@ -24,4 +24,6 @@ extern const MeterClass AMDGPUMemClockMeter_class;
+ 
+ extern const MeterClass AMDGPUVideoMeter_class;
+ 
++extern const MeterClass AMDGPUFanMeter_class;
++
+ #endif /* HEADER_AMDGPUMeter */
+diff --git a/linux/Platform.c b/linux/Platform.c
+index b286d4c2..ae15bb6a 100644
+--- a/linux/Platform.c
++++ b/linux/Platform.c
+@@ -288,6 +288,7 @@ const MeterClass* const Platform_meterTypes[] = {
+    &AMDGPUClockMeter_class,
+    &AMDGPUMemClockMeter_class,
+    &AMDGPUVideoMeter_class,
++   &AMDGPUFanMeter_class,
+    NULL
+ };
+ 

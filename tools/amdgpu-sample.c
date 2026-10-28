@@ -67,6 +67,8 @@ int main(void) {
       printNumber("memRate", s->memRate);
       printNumber("vclk", s->vclk);
       printNumber("dclk", s->dclk);
+      printNumber("fan", s->fan);
+      printNumber("fanMax", s->fanMax);
       printf("}\n");
       fflush(stdout);
    }

@@ -22,9 +22,9 @@ RENDER = f"/dev/dri/by-path/pci-{PCI}-render"
 DEVICE_FILES = ["vendor", "device", "gpu_busy_percent", "mem_busy_percent", "vcn_busy_percent",
                 "mem_info_vram_used", "mem_info_vram_total", "pp_dpm_mclk", "gpu_metrics",
                 "power/runtime_status"]
-HWMON_PREFIXES = ("name", "power1_", "temp", "freq")
+HWMON_PREFIXES = ("name", "power1_", "temp", "freq", "fan1_")
 DYNAMIC = ["gpuBusy", "memBusy", "vcnBusy", "vramUsed", "power", "powerCap", "sclk", "mclk",
-           "memRate", "vclk", "dclk"]
+           "memRate", "vclk", "dclk", "fan"]
 LABELS = ["edge", "junction", "mem"]
 SCLK_SEED = 3000.0
 MEM_RATE_MULTIPLIER = 16
@@ -113,6 +113,7 @@ def expected(root, pci=PCI):
         "vramTotal": vram_total, "mclkMax": max(mclk_levels) if mclk_levels else None,
         "tempCrit": [hwval("temp", temp_idx, lbl, "crit", 1000) for lbl in LABELS],
         "temp": [None] * 3, "sclkPeak": SCLK_SEED,
+        "fanMax": scaled(f"{hw}/fan1_max", 1) if hw else None,
     }
     for k in DYNAMIC:
         e[k] = None
@@ -122,7 +123,7 @@ def expected(root, pci=PCI):
         status = None
     if status == "suspended":
         # nothing is read from a sleeping card, not even the values that never change
-        e.update(status="suspended", vramTotal=None, mclkMax=None, tempCrit=[None] * 3)
+        e.update(status="suspended", vramTotal=None, mclkMax=None, tempCrit=[None] * 3, fanMax=None)
         return e
 
     e["gpuBusy"] = num(f"{dev}/gpu_busy_percent")
@@ -134,6 +135,7 @@ def expected(root, pci=PCI):
         if e["power"] is None:
             e["power"] = scaled(f"{hw}/power1_input", 1e6)
         e["powerCap"] = scaled(f"{hw}/power1_cap", 1e6)
+        e["fan"] = num(f"{hw}/fan1_input")
     e["temp"] = [hwval("temp", temp_idx, lbl, "input", 1000) for lbl in LABELS]
     e["sclk"] = hwval("freq", freq_idx, "sclk", "input", 1e6)
     e["mclk"] = hwval("freq", freq_idx, "mclk", "input", 1e6)
@@ -153,7 +155,7 @@ def expected(root, pci=PCI):
 
 def not_found():
     e = {"status": "not_found", "card": None, "pci": None, "vramTotal": None, "mclkMax": None,
-         "tempCrit": [None] * 3, "temp": [None] * 3, "sclkPeak": None}
+         "tempCrit": [None] * 3, "temp": [None] * 3, "sclkPeak": None, "fanMax": None}
     for k in DYNAMIC:
         e[k] = None
     return e
@@ -269,6 +271,9 @@ def main():
             ("power1_average missing: falls back to power1_input", power_input, expected),
             ("no hwmon dir", lambda r: shutil.rmtree(f"{dev(r)}/hwmon"), expected),
             ("empty pp_dpm_mclk", lambda r: write(f"{dev(r)}/pp_dpm_mclk", ""), expected),
+            ("fan spinning", lambda r: write(f"{hw(r)}/fan1_input", "1193\n"), expected),
+            ("fan1_input missing", lambda r: os.remove(f"{hw(r)}/fan1_input"), expected),
+            ("fan1_max missing", lambda r: os.remove(f"{hw(r)}/fan1_max"), expected),
             ("lowest supported PCI address wins", two_cards, lambda r: expected(r, "0000:03:00.0")),
             ("unsupported device id",
              lambda r: write(f"{dev(r)}/device", "0x7551\n"), lambda r: not_found()),
@@ -382,6 +387,8 @@ def main():
                 problems.append("mclk")
             if not same(x["memRate"], x["mclk"] * MEM_RATE_MULTIPLIER / 1000):
                 problems.append("memRate")
+            if x["fan"] is None or x["fanMax"] is None or not 0 <= x["fan"] <= x["fanMax"] * 1.2:
+                problems.append("fan")
             if x["vclk"] is None or x["dclk"] is None:
                 problems.append("vclk/dclk")
             check(f"sample busy={x['gpuBusy']}% {x['power']}W sclk={x['sclk']} mclk={x['mclk']} "

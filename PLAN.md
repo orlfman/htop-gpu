@@ -2,8 +2,8 @@
 
 Status (2026-10-28): steps 1–5 done. `amdgpu-meters` = `50714d79` sampler,
 `75dce070` GPU usage / VRAM / power, `0f0243a9` temperatures and clocks,
-`e4d2444b` video engine, `8717c760` own config file; all pushed. htop-gpu
-3.5.3-3 is installed as `htop-gpu` next to the repo `htop`, each with its own
+`e4d2444b` video engine, `8717c760` own config file, `546413b7` fan meter; all
+pushed. htop-gpu 3.5.3-4 is installed as `htop-gpu` next to the repo `htop`, each with its own
 config (`~/.config/htop-gpu/htop-gpurc` with the GPU column, `~/.config/htop/htoprc`
 two columns). Codex's `AUDIT.md` findings (3) are fixed, see its Resolution
 section. Next: step 6 items, only if wanted.
@@ -73,10 +73,11 @@ Samsung GDDR6. Kernel 7.3.0-4-cachyos.
 | 5 | GPU clock | `AMDGPUClock` | `GPU clock: ` | hwmon `freq1_input` (sclk) | `GPU clock: 2950MHz` | vs highest clock seen (seed 3000) |
 | 6 | VRAM clock | `AMDGPUMemClock` | `VRAM clock: ` | hwmon `freq2_input` (mclk) + `mem_busy_percent` | `VRAM clock: 1258MHz 20.1Gbps busy:12%` | vs top level (1258 MHz), bar text `1258MHz 20.1Gbps` |
 | 7 | Video engine | `AMDGPUVideo` | `VCN` | `vcn_busy_percent` + `gpu_metrics` vclk/dclk | `VCN:100% vclk:2933MHz dclk:2200MHz` | 0–100%, bar text `100%` |
+| 8 | Fan | `AMDGPUFan` | `Fan` | hwmon `fan1_input` / `fan1_max` | `Fan:1193RPM max:3200RPM`, `Fan:0RPM (stopped)` | vs max, bar text `1193RPM` / `stopped` |
 
 Each one is a separate meter, so it can be placed, moved and switched between
 bar / text / graph / LED in F2 Setup like any built-in meter. Captions and names
-are placeholders until we settle them. All 7 rows are built (steps 2–4) and
+are placeholders until we settle them. All 8 rows are built (steps 2–4, fan later) and
 show the real output.
 
 Caption rule (upstream): bar and graph modes draw only the first 3 characters of
@@ -352,8 +353,11 @@ Meters (steps 2 to 4):
    to the two-column backup. Checked with `tools/test-config-path.sh` (16
    checks; the unpatched build fails 7 of them, including deleting
    `~/.htoprc`).
-6. Later, if wanted: video engine process list, GTT in the VRAM meter, fan RPM,
-   other cards.
+6. Later, if wanted: video engine process list, GTT in the VRAM meter, other
+   cards. ~~Fan RPM~~ done 2026-10-28, commit `546413b7`: `AMDGPUFan` (row 8),
+   added after VCN in the user's htop-gpu column. Zero RPM mode shows as
+   `stopped`; the temperature where the fan starts is only exposed with
+   overdrive enabled (`gpu_od/fan_ctrl`), which stays off.
 
 ## Before going public
 
