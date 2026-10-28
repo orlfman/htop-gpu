@@ -19,6 +19,9 @@ rebuild_normal() {
    touch "$src/linux/AMDGPU.c"
    make -C "$src" -s -j"$(nproc)" htop
 }
+
+# bring everything else up to date first, so the fake root only ever reaches linux/AMDGPU.o
+make -C "$src" -s -j"$(nproc)" htop
 trap rebuild_normal EXIT
 
 touch "$src/linux/AMDGPU.c"

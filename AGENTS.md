@@ -81,6 +81,9 @@ Visual checks of meters (htop is full-screen, so run it in a terminal you can se
   [--suspended | --unbind | --remove PATH | --write PATH=VALUE]`, then
   `tools/build-htop-fake.sh test/fake-sysfs test/htop-fake` and run
   `test/htop-fake` the same way. Rebuilding only the tree needs no new binary.
+- Colors: a plain terminal read shows no colors, so use
+  `python3 -I tools/htop-capture.py test/<config> <htop binary> [seconds]`, which
+  prints each header row with its text grouped by color.
 
 First-time setup when `src/htop/Makefile` is missing:
 

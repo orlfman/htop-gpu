@@ -3,6 +3,38 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Claude Code (Claude Opus 5.5): step 3
+
+- **Meters:** `AMDGPUTemp` (`GPU temp: edge:41°C junction:43°C mem:42°C`),
+  `AMDGPUClock` (`GPU clock: 1487MHz`) and `AMDGPUMemClock`
+  (`VRAM clock: 772MHz 12.4Gbps busy:0%`) in `linux/AMDGPUMeter.c`, text mode by
+  default with upstream's text-meter captions. Bar/graph: junction vs its limit,
+  sclk vs highest seen (seed 3000), mclk vs its top level. Registered with three
+  more lines in `linux/Platform.c`.
+- **Temperature colors:** green / yellow (crit − 20) / red (crit − 10) per
+  sensor, bar follows the junction (attribute switching as in `LoadMeter`).
+  Honors htop's °F setting. Temps are printed with `%.0f`, not an `(int)` cast,
+  so garbage sysfs values can't overflow.
+- **Live checks:** all 4 modes; values match sysfs idle and under a 4K encode
+  (43/46/44 °C, 1563 vs 1560 MHz, 772 MHz, busy 3%); °F shows 109/115/111.
+- **Fake checks** (new `tools/htop-capture.py` shows colors): edge 50 green,
+  junction 95 bold yellow, mem 100 bold red, bar yellow; suspended → `sleep`;
+  missing mem temp → `mem:N/A` only; missing mclk + garbage busy →
+  `N/A busy:N/A`; missing junction → bar `N/A`, text keeps edge/mem; unbound →
+  `N/A`. Fixed: a missing temp showed `N/A` in green, now plain value color.
+- **Style:** IWYU wanted `Settings.h`. astyle flattens `case` labels unlike most
+  upstream code, so the color switch is an `if` chain (as in `LoadMeter`); noted
+  in PLAN.md.
+- **Tool fix:** `build-htop-fake.sh` now does a normal build first. Before, a
+  meter source edited just before a fake build got compiled with the fake
+  `CPPFLAGS`, leaving the fake path in the normal binary's debug info
+  (harmless, `-ggdb3` macro record, but not what the script promises).
+- **Checks:** build clean, `STYLE OK`, `ALL PASSED`; normal binary has no fake path.
+- **Committed and pushed** (user's OK): `src/htop` commit `f45e9ec7` (`linux: add
+  AMD GPU temperature and clock meters`) and the doc/tool changes here.
+- **Open:** captions in bar mode (`GPU`, `GPU`, `VRA`), see PLAN.md.
+- **Next:** step 4, video engine meter.
+
 ## 2026-10-28, Claude Code (Claude Opus 5.5): step 2
 
 - **Meters:** new `linux/AMDGPUMeter.{c,h}` with `AMDGPUUsage` (`GPU`),

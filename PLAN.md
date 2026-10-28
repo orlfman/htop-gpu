@@ -1,8 +1,9 @@
 # htop-gpu: plan
 
-Status (2026-10-28): steps 1–2 done, committed and pushed on `amdgpu-meters`
-(`0c74a6b7` sampler, `4875c09e` GPU usage / VRAM / power meters). Nothing
-installed. Next: step 3 (temps and both clock meters).
+Status (2026-10-28): steps 1–3 done, committed and pushed on `amdgpu-meters`
+(`0c74a6b7` sampler, `4875c09e` GPU usage / VRAM / power meters, `f45e9ec7`
+temperature and clock meters). Nothing installed. Next: step 4 (video engine
+meter).
 
 In progress: nobody.
 
@@ -35,6 +36,10 @@ new htop releases easy to pick up:
   files untouched). It only checks the files htop-gpu adds on top of the upstream
   tag: upstream's own files aren't fully IWYU / astyle clean in 3.5.3 (e.g.
   `linux/GPU.c`), and fixing them would only make rebasing harder.
+  One known mismatch: the astyle baseline puts `case` labels flush with
+  `switch`, while most upstream code indents them (38 vs 12 in 3.5.3). Prefer
+  constructs that avoid the conflict (step 3 uses an `if` chain, like
+  `LoadMeter`).
 - **Minimal diff to upstream files:** new code lives in new files
   (`linux/AMDGPU*`). Existing files only get registration lines (`Makefile.am`,
   `linux/Platform.c`). Upstream code isn't reformatted or cleaned up, and colors,
@@ -59,22 +64,31 @@ Samsung GDDR6. Kernel 7.3.0-4-cachyos.
 | 1 | GPU usage | `AMDGPUUsage` | `GPU` | `gpu_busy_percent` | `GPU:45%` | 0–100%, bar text `45%` |
 | 2 | VRAM | `AMDGPUVRAM` | `VRM` | `mem_info_vram_used` / `mem_info_vram_total` | `VRM:15.9G used:3.21G` | used / total, bar text `3.21G/15.9G` |
 | 3 | Power | `AMDGPUPower` | `Pwr` | hwmon `power1_average` / `power1_cap` | `Pwr:245W cap:304W` | 0 to power cap, bar text `245W/304W` |
-| 4 | Temps | `AMDGPUTemp` | `GTmp` | hwmon `temp1/2/3_input` + `_crit` | `edge 52°C junction 68°C mem 70°C` | junction vs its crit |
-| 5 | GPU clock | `AMDGPUClock` | `Clk` | hwmon `freq1_input` (sclk) | `2950MHz` | vs highest clock seen |
-| 6 | VRAM clock | `AMDGPUMemClock` | `MClk` | hwmon `freq2_input` (mclk) + `mem_busy_percent` | `1258MHz 20.1Gbps ctrl 12%` | vs 1258 MHz |
+| 4 | Temps | `AMDGPUTemp` | `GPU temp: ` | hwmon `temp1/2/3_input` + `_crit` | `GPU temp: edge:52°C junction:68°C mem:70°C` | junction vs its crit, bar text `68°C` |
+| 5 | GPU clock | `AMDGPUClock` | `GPU clock: ` | hwmon `freq1_input` (sclk) | `GPU clock: 2950MHz` | vs highest clock seen (seed 3000) |
+| 6 | VRAM clock | `AMDGPUMemClock` | `VRAM clock: ` | hwmon `freq2_input` (mclk) + `mem_busy_percent` | `VRAM clock: 1258MHz 20.1Gbps busy:12%` | vs top level (1258 MHz), bar text `1258MHz 20.1Gbps` |
 | 7 | Video engine | `AMDGPUVideo` | `VCN` | `vcn_busy_percent` + `gpu_metrics` vclk/dclk | `100% vclk 2933 dclk 2200MHz` | 0–100% |
 
 Each one is a separate meter, so it can be placed, moved and switched between
 bar / text / graph / LED in F2 Setup like any built-in meter. Captions and names
-are placeholders until we settle them. Rows 1–3 are built (step 2) and show the
-real output.
+are placeholders until we settle them. Rows 1–6 are built (steps 2–3) and show
+the real output.
 
 Caption rule (upstream): bar and graph modes draw only the first 3 characters of
 a caption, so bar-mode meters use 3-character captions (`Mem`, `Swp`, `GPU`),
 and text mode is `caption` + `:` + values from the meter's display function.
-That's why VRAM is `VRM`, not `VRAM` (which a bar would cut to `VRA`). When a
-value is missing the meter shows `N/A`, and `sleep` when the card is runtime
-suspended.
+That's why VRAM is `VRM`, not `VRAM` (which a bar would cut to `VRA`).
+Text-mode meters follow upstream's other convention (`Load average: `,
+`Tasks: `): a readable caption ending in `: `, values as `label:value`. Temps
+and both clocks are text by default, so in bar or graph mode their captions get
+cut to `GPU`, `GPU` and `VRA`, like upstream's `Battery: ` becomes `Bat`.
+When a value is missing the meter shows `N/A`, and `sleep` when the card is
+runtime suspended.
+
+Temperature colors: each reading is green, yellow from 20 °C below that sensor's
+critical limit, red from 10 °C below (junction 90 / 100 °C, mem 88 / 98 °C). The
+bar takes the junction's color, switching attributes the way upstream's
+`LoadMeter` does. Temps follow htop's °C/°F setting.
 
 All sysfs paths are under `/sys/bus/pci/devices/0000:04:00.0/`; hwmon is the
 `hwmon/hwmonN/` dir inside it (named `amdgpu`).
@@ -197,6 +211,7 @@ htop-gpu/                    git repo (ignores src/, test/, makepkg output)
     check-style.sh           IWYU + astyle on the files htop-gpu adds
     fake-sysfs.py            frozen copy of the card's sysfs, optionally broken
     build-htop-fake.sh       htop binary that reads a fake-sysfs tree
+    htop-capture.py          header text grouped by color (for checking colors)
     gpu_metrics.py           gpu_metrics v1.3 decoder
     vcn_probe.py             runs a command, samples fdinfo + gpu_metrics
 ```
@@ -273,7 +288,11 @@ Meters (steps 2 to 4):
    `MEMORY_1`, `BATTERY`), registered after `GPUMeter_class` in
    `linux/Platform.c`. Checked live in all 4 modes against sysfs (idle and under a
    VA-API encode load) and on fake trees (`sleep`, partial `N/A`, card missing).
-3. Temps and both clock meters.
+3. ~~Temps and both clock meters.~~ Done 2026-10-28, commit `f45e9ec7`:
+   `AMDGPUTemp`, `AMDGPUClock`, `AMDGPUMemClock` added to `linux/AMDGPUMeter.c`
+   and registered after the step 2 meters. Checked live in all 4 modes, in °F,
+   idle and under load against sysfs, colors with `tools/htop-capture.py` on fake
+   hot temps, and `sleep` / partial `N/A` / missing card on fake trees.
 4. Video engine meter.
 5. `packaging/PKGBUILD`, install, rework the htop header layout.
 6. Later, if wanted: video engine process list, GTT in the VRAM meter, fan RPM,
