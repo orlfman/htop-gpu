@@ -1,0 +1,14 @@
+# separate git clone of upstream htop (branch amdgpu-meters)
+/src/
+
+# throwaway htoprc for test runs
+/test/
+
+# makepkg output inside packaging/
+/packaging/src/
+/packaging/pkg/
+/packaging/htop/
+*.pkg.tar.*
+*.log
+
+__pycache__/
