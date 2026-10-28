@@ -2,7 +2,7 @@
 
 Date: 2026-10-28 (America/Phoenix).
 Auditor: Codex.
-Status: three reproduced issues; no fixes applied.
+Status: all three original findings fixed by Claude and independently re-tested by Codex; see Resolution and Independent re-test below.
 All three are P2 (normal priority).
 
 ## Scope and baseline
@@ -145,3 +145,56 @@ Installed as `htop-gpu 3.5.3-3`.
    New `tools/test-check-style.sh` covers clean, each tool failing, both failing, both missing, and a real IWYU and astyle finding (four cases failed on the audited script).
 
 Checks after the fixes: build clean, `STYLE OK`, `test-sampler.py`, `test-config-path.sh` (33) and `test-check-style.sh` all `ALL PASSED`; the config-path suite and a live seven-meter run on the ASan + UBSan htop produced no sanitizer reports; namcap matches stock; the package shares no files with stock htop.
+
+
+## Independent re-test by Codex
+
+Date: 2026-10-28 (America/Phoenix).
+Requested by the user after Claude's fixes.
+Result: all three original findings passed re-testing; no failures were found in the checks run.
+
+### Baseline tested
+
+- Outer repository: `6efbb1c0a9f6c5b8c440691de5fdbf0e45247904`.
+- htop source repository: `8717c760aea42110b7c2326f186268998df90413`.
+- Installed package: `htop-gpu 3.5.3-3`, alongside stock `htop 3.5.3-1.1`.
+- Both repositories were clean before and after the re-test.
+
+### Results against the original findings
+
+| Finding | Re-test | Result |
+| --- | --- | --- |
+| 1. Read-only and symlinked stock configs | `tools/test-config-path.sh`, run once against `src/htop/htop` and once against `/usr/bin/htop-gpu` | All 33 checks passed on each binary. |
+| 2. Discovery failed to recover | `python3 -I tools/test-sampler.py` | `ALL PASSED`, including all four recovery cases and no ASan/UBSan reports. |
+| 3. Style tools could fail silently | `tools/test-check-style.sh` and `tools/check-style.sh` | All seven regression cases passed; the real style check printed `STYLE OK`. |
+
+Config coverage included read-only and symlinked stock XDG and legacy files, preserving their contents, modes, and links while saving an independent htop-gpu config.
+An existing read-only htop-gpu config remained unchanged.
+The config suites also covered default paths, precedence, explicit `XDG_CONFIG_HOME`, and `HTOPRC` overrides.
+
+The sampler recovered when hwmon appeared after startup, when hwmon was renumbered, when a card bound after startup, and when a running card was unbound and rebound.
+Each recovery case changed state within one running sampler process.
+The existing cache, suspended-card, wake-up, malformed/missing-file, and live GPU checks also passed.
+Live VA-API encode reached 100% video-engine busy, with vclk/dclk peaks of 2933/2200 MHz.
+
+The style regression suite verified exit 0 for clean files, exit 2 for missing or failing tools, and exit 1 for actual IWYU or astyle findings.
+Failing cases did not print `STYLE OK`.
+
+### Additional verification
+
+- Warning-strict, syntax-only compilation of `linux/AMDGPU.c` and `linux/AMDGPUMeter.c`: passed.
+- Python parsing, shell/PKGBUILD syntax, and Git whitespace checks: passed.
+- All five packaged patch checksums matched `packaging/PKGBUILD`.
+- Sequentially applying those patches to temporary upstream `3.5.3` files reproduced all eight changed source files byte for byte.
+- Installed stock htop and htop-gpu packages shared no files (shared directories excluded).
+- `pacman -Qkk htop-gpu`: 16 total files, zero altered files.
+- The installed binary reported `3.5.3-3-gpu`.
+- Before/after SHA-256 comparisons verified 390 files unchanged, including tracked project/source files, both tested htop binaries, and the user's stock and htop-gpu configs.
+
+### Scope and limits
+
+The re-test used existing development and installed htop binaries, plus newly compiled temporary sampler binaries with ASan/UBSan.
+All temporary test artifacts were outside the project and cleaned up by the test harnesses.
+No full htop/package rebuild, reinstall, new whole-htop sanitizer run, or interactive game/VRAM-load check was performed.
+No source, package, user config, or project documentation files were changed during the re-test.
+This section and the audit status above were updated afterward at the user's request; the re-test did not commit or push anything.

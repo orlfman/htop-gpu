@@ -3,6 +3,18 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Codex: independent re-test of the audit fixes
+
+- Recorded in `AUDIT.md` ("Independent re-test by Codex"; status line updated),
+  committed by Claude Code at the user's request. Codex changed no other files.
+- All three findings pass on outer `6efbb1c` / htop `8717c760`: config-path suite
+  (33) on the dev and installed binaries, sampler suite incl. the four recovery
+  cases, style-check suite (7) plus `STYLE OK`; patch checksums and
+  byte-for-byte patch application, no shared files with stock htop,
+  `pacman -Qkk` clean. No new findings.
+- Not covered by either agent yet: the meters under a real game load (sclk
+  above the 3000 MHz seed, high VRAM, temps near the color thresholds).
+
 ## 2026-10-28, Claude Code (Claude Opus 5.5): fixed Codex's audit findings
 
 - **Codex audit** (`AUDIT.md`, by Codex, read-only audit): 3 P2 findings. Each
