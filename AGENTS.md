@@ -22,9 +22,13 @@ possible so new htop releases are easy to rebase onto.
 ## Layout
 
 - This folder is its own git repo: plan, docs, `tools/`, later `packaging/`.
-- `src/htop` is a separate git clone of upstream htop
-  (https://github.com/htop-dev/htop), branch `amdgpu-meters` on top of tag
+  Branch `main`, remote `origin` = https://github.com/orlfman/htop-gpu (private).
+- `src/htop` is a separate git clone of htop, branch `amdgpu-meters` on top of tag
   `3.5.3`. All htop code changes are commits there. The outer repo ignores `src/`.
+  Remotes: `upstream` = https://github.com/htop-dev/htop, `origin` =
+  https://github.com/orlfman/htop (private; a plain repo, not a GitHub fork,
+  since GitHub forks can't be private).
+- The `gh` CLI is logged in as `orlfman`, and git uses it for github.com over HTTPS.
 - `packaging/` (step 5) will hold the PKGBUILD and the patches exported from
   `src/htop` with `git format-patch`.
 
@@ -46,7 +50,8 @@ Only one agent works on the project at a time.
   no `Signed-off-by:` trailer.
 - Keep upstream files nearly untouched. New code goes in new files; existing files
   only get registration lines. Don't reformat or clean up upstream code.
-- Commit only when the user asks. Never push.
+- Commit and push only when the user asks. Never change GitHub repo settings or
+  visibility, or create or delete repos, without asking.
 - Commits: small and self-contained, each one builds and works, upstream-style
   subjects (`linux: add ...`), descriptive bodies, no merge commits, fixups
   squashed into the commit they fix.

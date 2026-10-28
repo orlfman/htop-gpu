@@ -3,6 +3,18 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Claude Code (Claude Opus 5.5): GitHub setup
+
+- Installed `github-cli` (user ran the sudo part) and logged in as `orlfman` with
+  the browser device flow; token in the system keyring, git uses
+  `gh auth git-credential` for github.com.
+- Created two private repos and pushed: `orlfman/htop-gpu` (this folder, `main`)
+  and `orlfman/htop` (`src/htop`, branch `amdgpu-meters`, set as default). In
+  `src/htop` the htop-dev remote is now `upstream`, and `origin` is `orlfman/htop`.
+- AGENTS.md / PLAN.md updated: remotes, push only when asked, `git fetch upstream`,
+  and a "Before going public" checklist.
+- No code changes. Next: still step 2.
+
 ## 2026-10-28, Claude Code (Claude Opus 5.5)
 
 Planning, step 1, and setting the project up for more than one agent.

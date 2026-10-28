@@ -6,6 +6,9 @@ Next: step 2.
 
 In progress: nobody.
 
+GitHub (both private): https://github.com/orlfman/htop-gpu (this folder) and
+https://github.com/orlfman/htop (branch `amdgpu-meters`).
+
 Agents: read `AGENTS.md` first (shared rules, turn-taking, checks).
 History: `CHANGELOG.md`.
 
@@ -42,7 +45,7 @@ new htop releases easy to pick up:
   trailer naming the agent and model, so each agent's commits are told apart
   (upstream's `AGENTS.md` accepts that or `Assisted-by:`).
   **No `Signed-off-by:`**, since nothing goes upstream.
-- **New htop release:** `git fetch --tags`, then
+- **New htop release:** `git fetch upstream --tags`, then
   `git rebase --onto <new tag> <old tag> amdgpu-meters`, rebuild, run
   `tools/test-sampler.py` and `tools/check-style.sh`, then bump the PKGBUILD.
 
@@ -260,6 +263,17 @@ Meters (steps 2 to 4):
 5. `packaging/PKGBUILD`, install, rework the htop header layout.
 6. Later, if wanted: video engine process list, GTT in the VRAM meter, fan RPM,
    other cards.
+
+## Before going public
+
+Both GitHub repos are private for now. Before making them public:
+
+- Turn `orlfman/htop` into a real GitHub fork of htop-dev/htop (forks can't be
+  private, so it's a plain repo now): fork on GitHub, push `amdgpu-meters` there,
+  delete the private copy.
+- Add a `LICENSE` (GPL-2.0-or-later, like htop) and a short `README.md` to htop-gpu.
+- `tools/test-sampler.py`: find the card's PCI address instead of hardcoding
+  `0000:04:00.0`.
 
 ## Open questions
 
