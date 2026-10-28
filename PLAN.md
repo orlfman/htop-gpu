@@ -1,8 +1,8 @@
 # htop-gpu: plan
 
-Status (2026-10-28): step 1 done and committed on `amdgpu-meters`. The sampler
-(`linux/AMDGPU.c`) passes `tools/test-sampler.py`. No meters yet, nothing installed.
-Next: step 2.
+Status (2026-10-28): steps 1–2 done, committed and pushed on `amdgpu-meters`
+(`0c74a6b7` sampler, `4875c09e` GPU usage / VRAM / power meters). Nothing
+installed. Next: step 3 (temps and both clock meters).
 
 In progress: nobody.
 
@@ -56,9 +56,9 @@ Samsung GDDR6. Kernel 7.3.0-4-cachyos.
 
 | # | Meter | htoprc name | Caption | Source | Text mode | Bar / graph |
 |---|-------|-------------|---------|--------|-----------|-------------|
-| 1 | GPU usage | `AMDGPUUsage` | `GPU` | `gpu_busy_percent` | `45%` | 0–100% |
-| 2 | VRAM | `AMDGPUVRAM` | `VRAM` | `mem_info_vram_used` / `mem_info_vram_total` | `3.21G/15.9G` | used / total |
-| 3 | Power | `AMDGPUPower` | `Pwr` | hwmon `power1_average` / `power1_cap` | `245W/304W` | 0 to power cap |
+| 1 | GPU usage | `AMDGPUUsage` | `GPU` | `gpu_busy_percent` | `GPU:45%` | 0–100%, bar text `45%` |
+| 2 | VRAM | `AMDGPUVRAM` | `VRM` | `mem_info_vram_used` / `mem_info_vram_total` | `VRM:15.9G used:3.21G` | used / total, bar text `3.21G/15.9G` |
+| 3 | Power | `AMDGPUPower` | `Pwr` | hwmon `power1_average` / `power1_cap` | `Pwr:245W cap:304W` | 0 to power cap, bar text `245W/304W` |
 | 4 | Temps | `AMDGPUTemp` | `GTmp` | hwmon `temp1/2/3_input` + `_crit` | `edge 52°C junction 68°C mem 70°C` | junction vs its crit |
 | 5 | GPU clock | `AMDGPUClock` | `Clk` | hwmon `freq1_input` (sclk) | `2950MHz` | vs highest clock seen |
 | 6 | VRAM clock | `AMDGPUMemClock` | `MClk` | hwmon `freq2_input` (mclk) + `mem_busy_percent` | `1258MHz 20.1Gbps ctrl 12%` | vs 1258 MHz |
@@ -66,7 +66,15 @@ Samsung GDDR6. Kernel 7.3.0-4-cachyos.
 
 Each one is a separate meter, so it can be placed, moved and switched between
 bar / text / graph / LED in F2 Setup like any built-in meter. Captions and names
-are placeholders until we settle them.
+are placeholders until we settle them. Rows 1–3 are built (step 2) and show the
+real output.
+
+Caption rule (upstream): bar and graph modes draw only the first 3 characters of
+a caption, so bar-mode meters use 3-character captions (`Mem`, `Swp`, `GPU`),
+and text mode is `caption` + `:` + values from the meter's display function.
+That's why VRAM is `VRM`, not `VRAM` (which a bar would cut to `VRA`). When a
+value is missing the meter shows `N/A`, and `sleep` when the card is runtime
+suspended.
 
 All sysfs paths are under `/sys/bus/pci/devices/0000:04:00.0/`; hwmon is the
 `hwmon/hwmonN/` dir inside it (named `amdgpu`).
@@ -187,6 +195,8 @@ htop-gpu/                    git repo (ignores src/, test/, makepkg output)
     build-sampler.sh         builds it with ASan/UBSan, optional fake sysfs root
     test-sampler.py          the sampler test suite (see Test plan)
     check-style.sh           IWYU + astyle on the files htop-gpu adds
+    fake-sysfs.py            frozen copy of the card's sysfs, optionally broken
+    build-htop-fake.sh       htop binary that reads a fake-sysfs tree
     gpu_metrics.py           gpu_metrics v1.3 decoder
     vcn_probe.py             runs a command, samples fdinfo + gpu_metrics
 ```
@@ -248,7 +258,8 @@ Meters (steps 2 to 4):
 - Every meter in all four modes (bar / text / graph / LED), in a narrow column,
   with °F switched on.
 - htop's own CPU use about the same as stock.
-- A few minutes on the `--enable-debug` build with AddressSanitizer.
+- A few minutes on the `--enable-debug` build with AddressSanitizer (once, after
+  step 4, with all meters in the header; the sampler alone already runs under ASan).
 
 ## Order of work
 
@@ -257,7 +268,11 @@ Meters (steps 2 to 4):
    commit (`linux: add AMDGPU sysfs sampler for RX 9070 XT meters`). Dev build: `./configure --prefix=/usr --sysconfdir=/etc
    --enable-affinity --enable-capabilities --enable-delayacct --enable-sensors
    --enable-unicode --enable-debug && make`.
-2. GPU usage, VRAM, power meters.
+2. ~~GPU usage, VRAM, power meters.~~ Done 2026-10-28, commit `4875c09e`: `linux/AMDGPUMeter.{c,h}`
+   (3 classes, modeled on `SwapMeter.c`, upstream colors `GPU_ENGINE_1`,
+   `MEMORY_1`, `BATTERY`), registered after `GPUMeter_class` in
+   `linux/Platform.c`. Checked live in all 4 modes against sysfs (idle and under a
+   VA-API encode load) and on fake trees (`sleep`, partial `N/A`, card missing).
 3. Temps and both clock meters.
 4. Video engine meter.
 5. `packaging/PKGBUILD`, install, rework the htop header layout.

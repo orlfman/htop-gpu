@@ -3,6 +3,27 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Claude Code (Claude Opus 5.5): step 2
+
+- **Meters:** new `linux/AMDGPUMeter.{c,h}` with `AMDGPUUsage` (`GPU`),
+  `AMDGPUVRAM` (`VRM`) and `AMDGPUPower` (`Pwr`), modeled on upstream's
+  `SwapMeter.c`, reusing upstream colors. Registered with one include and three
+  lines after `GPUMeter_class` in `linux/Platform.c`, plus two `Makefile.am`
+  lines. Missing values show `N/A`, a sleeping card shows `sleep`.
+- **Caption change:** VRAM's caption is `VRM` because bar/graph modes only draw
+  3 caption characters (upstream's convention). Names are still open (PLAN.md).
+- **Live checks** (dev build, `HTOPRC=test/...`): bar, text, graph and LED all
+  render; values match sysfs at idle and under a 4K VA-API encode (16% busy,
+  55 W, 1.31G VRAM). The stock GPU meter read 108.9% at the same moment.
+- **Fake-card checks:** new `tools/fake-sysfs.py` + `tools/build-htop-fake.sh`.
+  Suspended → `sleep` everywhere; garbage busy + missing cap → `N/A` on just those
+  two; unbound card → `N/A`, graphs flat, no assert in the debug build.
+- **Checks:** build clean, `STYLE OK` (IWYU wanted `<stddef.h>` added and
+  `Machine.h` dropped, since `Meter.h` provides it), `ALL PASSED`.
+- **Committed and pushed** (user's OK): `src/htop` commit `4875c09e` (`linux: add
+  AMD GPU usage, VRAM and power meters`) and the doc/tool changes here.
+- **Next:** step 3, temperatures and both clock meters.
+
 ## 2026-10-28, Claude Code (Claude Opus 5.5): GitHub setup
 
 - Installed `github-cli` (user ran the sudo part) and logged in as `orlfman` with

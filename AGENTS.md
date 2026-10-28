@@ -73,6 +73,15 @@ Run after every change, from this folder:
 - `tools/check-style.sh` must end with `STYLE OK` (IWYU + astyle on htop-gpu's files).
 - `python3 -I tools/test-sampler.py` must end with `ALL PASSED` (about 30 s).
 
+Visual checks of meters (htop is full-screen, so run it in a terminal you can see):
+
+- Live: `HTOPRC=test/<config> src/htop/htop`, with a throwaway config in `test/`
+  that places the meters to check (e.g. one column per meter mode).
+- Broken or sleeping card: `python3 -I tools/fake-sysfs.py test/fake-sysfs
+  [--suspended | --unbind | --remove PATH | --write PATH=VALUE]`, then
+  `tools/build-htop-fake.sh test/fake-sysfs test/htop-fake` and run
+  `test/htop-fake` the same way. Rebuilding only the tree needs no new binary.
+
 First-time setup when `src/htop/Makefile` is missing:
 
 ```
