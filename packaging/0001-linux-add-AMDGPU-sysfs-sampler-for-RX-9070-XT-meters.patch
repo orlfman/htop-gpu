@@ -1,0 +1,459 @@
+From 0c74a6b7cf9a8207c991a4599270678d0203e4f8 Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 14:08:49 -0700
+Subject: [PATCH 1/4] linux: add AMDGPU sysfs sampler for RX 9070 XT meters
+
+Read the data for the upcoming RX 9070 XT header meters from sysfs:
+GPU, memory controller and video engine busy percentages, VRAM use,
+power and power cap, edge/junction/memory temperatures with their
+critical limits, and the GPU and memory clocks from hwmon. RDNA 4 has
+no pp_dpm_vclk/pp_dpm_dclk, so the video clocks are taken from the
+gpu_metrics v1.3 table, after checking its size and revision.
+
+The card is found by PCI ID among the devices bound to amdgpu, and the
+hwmon inputs by their labels, since card and hwmon numbers change
+between boots. All meters share one sample that is read at most once
+per refresh. Nothing is read while the card is runtime suspended, as
+reading hwmon or pp_dpm_mclk would wake it up.
+
+AMDGPU_SYSFS_ROOT allows pointing the sampler at a fake sysfs tree for
+testing; htop itself always uses /sys.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Makefile.am    |   2 +
+ linux/AMDGPU.c | 333 +++++++++++++++++++++++++++++++++++++++++++++++++
+ linux/AMDGPU.h |  64 ++++++++++
+ 3 files changed, 399 insertions(+)
+ create mode 100644 linux/AMDGPU.c
+ create mode 100644 linux/AMDGPU.h
+
+diff --git a/Makefile.am b/Makefile.am
+index 115a07e8..7a151202 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -188,6 +188,7 @@ linux_platform_headers = \
+ 	generic/gettime.h \
+ 	generic/hostname.h \
+ 	generic/uname.h \
++	linux/AMDGPU.h \
+ 	linux/CGroupUtils.h \
+ 	linux/Compat.h \
+ 	linux/GPU.h \
+@@ -217,6 +218,7 @@ linux_platform_sources = \
+ 	generic/gettime.c \
+ 	generic/hostname.c \
+ 	generic/uname.c \
++	linux/AMDGPU.c \
+ 	linux/CGroupUtils.c \
+ 	linux/Compat.c \
+ 	linux/GPU.c \
+diff --git a/linux/AMDGPU.c b/linux/AMDGPU.c
+new file mode 100644
+index 00000000..972a920f
+--- /dev/null
++++ b/linux/AMDGPU.c
+@@ -0,0 +1,333 @@
++/*
++htop - linux/AMDGPU.c
++(C) 2026 orlfman
++Released under the GNU GPLv2+, see the COPYING file
++in the source distribution for its full text.
++*/
++
++#include "config.h" // IWYU pragma: keep
++
++#include "linux/AMDGPU.h"
++
++#include <dirent.h>
++#include <errno.h>
++#include <math.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/types.h>
++
++#include "Macros.h"
++#include "XUtils.h"
++#include "linux/Compat.h"
++
++
++#ifndef AMDGPU_SYSFS_ROOT
++#define AMDGPU_SYSFS_ROOT "/sys"
++#endif
++
++#define AMDGPU_DRIVER_DIR  AMDGPU_SYSFS_ROOT "/bus/pci/drivers/amdgpu"
++#define AMDGPU_DEVICES_DIR AMDGPU_SYSFS_ROOT "/bus/pci/devices"
++
++#define AMDGPU_PCI_VENDOR 0x1002
++
++/* hwmon temperature and frequency inputs are looked up by label, these are the highest indices tried */
++#define AMDGPU_HWMON_MAX_INDEX 8
++
++/* struct gpu_metrics_v1_3 in drivers/gpu/drm/amd/include/kgd_pp_interface.h */
++#define GPU_METRICS_V1_3_SIZE          120
++#define GPU_METRICS_V1_3_CURRENT_VCLK0 60
++#define GPU_METRICS_V1_3_CURRENT_DCLK0 62
++#define GPU_METRICS_UNSET              0xFFFF
++
++static const AMDGPUCard AMDGPU_cards[] = {
++   { .deviceId = 0x7550, .name = "RX 9070 XT", .memRateMultiplier = 16, .sclkSeed = 3000.0 },
++};
++
++static const char* const AMDGPU_tempLabels[AMDGPU_TEMP_COUNT] = {
++   [AMDGPU_TEMP_EDGE]     = "edge",
++   [AMDGPU_TEMP_JUNCTION] = "junction",
++   [AMDGPU_TEMP_MEM]      = "mem",
++};
++
++static bool initialized;
++static bool staticRead;
++static char deviceDir[1024];
++static char hwmonDir[1024];
++static unsigned int tempIndex[AMDGPU_TEMP_COUNT];   /* hwmon tempN, 0 if missing */
++static unsigned int sclkIndex;                      /* hwmon freqN, 0 if missing */
++static unsigned int mclkIndex;
++static uint64_t lastMonotonicMs;
++static AMDGPUSample sample;
++
++static ssize_t AMDGPU_readFile(const char* dir, const char* file, void* buffer, size_t size) {
++   char path[2048];
++   xSnprintf(path, sizeof(path), "%s/%s", dir, file);
++   return Compat_readfile(path, buffer, size);
++}
++
++static bool AMDGPU_readText(const char* dir, const char* file, char* buffer, size_t size) {
++   if (AMDGPU_readFile(dir, file, buffer, size) <= 0)
++      return false;
++
++   /* cut the trailing newline */
++   char* newline = strchr(buffer, '\n');
++   if (newline)
++      *newline = '\0';
++   return true;
++}
++
++static double AMDGPU_readNumber(const char* dir, const char* file) {
++   char buffer[32];
++   if (!AMDGPU_readText(dir, file, buffer, sizeof(buffer)))
++      return NAN;
++
++   char* end;
++   errno = 0;
++   long long value = strtoll(buffer, &end, 10);
++   if (errno || end == buffer)
++      return NAN;
++
++   return (double)value;
++}
++
++static unsigned long AMDGPU_readHex(const char* dir, const char* file) {
++   char buffer[16];
++   if (!AMDGPU_readText(dir, file, buffer, sizeof(buffer)))
++      return 0;
++
++   return strtoul(buffer, NULL, 16);
++}
++
++/* hwmon files are named <type><index>_<item>, e.g. temp2_input */
++static double AMDGPU_readHwmon(const char* type, unsigned int index, const char* item) {
++   if (!index)
++      return NAN;
++
++   char file[32];
++   xSnprintf(file, sizeof(file), "%s%u_%s", type, index, item);
++   return AMDGPU_readNumber(hwmonDir, file);
++}
++
++/* Picks the supported card with the lowest PCI address that is bound to amdgpu */
++static const AMDGPUCard* AMDGPU_findCard(void) {
++   DIR* dir = opendir(AMDGPU_DRIVER_DIR);
++   if (!dir)
++      return NULL;
++
++   const AMDGPUCard* found = NULL;
++   const struct dirent* entry;
++   while ((entry = readdir(dir))) {
++      const char* address = entry->d_name;
++
++      /* device links look like 0000:04:00.0, everything else is a driver control file */
++      if (!strchr(address, ':') || strlen(address) >= sizeof(sample.pciAddress))
++         continue;
++      if (found && strcmp(address, sample.pciAddress) > 0)
++         continue;
++
++      char devicePath[256];
++      xSnprintf(devicePath, sizeof(devicePath), AMDGPU_DEVICES_DIR "/%s", address);
++      if (AMDGPU_readHex(devicePath, "vendor") != AMDGPU_PCI_VENDOR)
++         continue;
++
++      unsigned long deviceId = AMDGPU_readHex(devicePath, "device");
++      for (size_t i = 0; i < ARRAYSIZE(AMDGPU_cards); i++) {
++         if (AMDGPU_cards[i].deviceId == deviceId) {
++            found = &AMDGPU_cards[i];
++            String_safeStrncpy(sample.pciAddress, address, sizeof(sample.pciAddress));
++            break;
++         }
++      }
++   }
++
++   closedir(dir);
++   return found;
++}
++
++static bool AMDGPU_findHwmon(void) {
++   char path[2048];
++   xSnprintf(path, sizeof(path), "%s/hwmon", deviceDir);
++
++   DIR* dir = opendir(path);
++   if (!dir)
++      return false;
++
++   bool found = false;
++   const struct dirent* entry;
++   while ((entry = readdir(dir))) {
++      if (String_startsWith(entry->d_name, "hwmon") && strlen(entry->d_name) < 32) {
++         xSnprintf(hwmonDir, sizeof(hwmonDir), "%s/%s", path, entry->d_name);
++         found = true;
++         break;
++      }
++   }
++
++   closedir(dir);
++   return found;
++}
++
++static unsigned int AMDGPU_findLabel(const char* type, const char* label) {
++   for (unsigned int i = 1; i <= AMDGPU_HWMON_MAX_INDEX; i++) {
++      char file[32];
++      char buffer[32];
++      xSnprintf(file, sizeof(file), "%s%u_label", type, i);
++      if (AMDGPU_readText(hwmonDir, file, buffer, sizeof(buffer)) && String_eq(buffer, label))
++         return i;
++   }
++   return 0;
++}
++
++/* pp_dpm_mclk lists one level per line: "5: 1258Mhz *" */
++static double AMDGPU_readMclkMax(void) {
++   char buffer[512];
++   if (AMDGPU_readFile(deviceDir, "pp_dpm_mclk", buffer, sizeof(buffer)) <= 0)
++      return NAN;
++
++   double max = NAN;
++   const char* line = buffer;
++   for (;;) {
++      const char* colon = strchr(line, ':');
++      if (!colon)
++         break;
++
++      char* end;
++      double value = strtod(colon + 1, &end);
++      if (end != colon + 1 && (isNaN(max) || value > max))
++         max = value;
++
++      const char* newline = strchr(colon, '\n');
++      if (!newline)
++         break;
++
++      line = newline + 1;
++   }
++   return max;
++}
++
++static double AMDGPU_metricsClock(const unsigned char* metrics, size_t offset) {
++   uint16_t value;
++   memcpy(&value, metrics + offset, sizeof(value));
++   return value == GPU_METRICS_UNSET ? NAN : value;
++}
++
++static void AMDGPU_readMetrics(void) {
++   unsigned char metrics[512];
++   if (AMDGPU_readFile(deviceDir, "gpu_metrics", metrics, sizeof(metrics)) < GPU_METRICS_V1_3_SIZE)
++      return;
++
++   /* header: uint16_t structure_size, uint8_t format_revision, uint8_t content_revision */
++   uint16_t size;
++   memcpy(&size, metrics, sizeof(size));
++   if (size != GPU_METRICS_V1_3_SIZE || metrics[2] != 1 || metrics[3] != 3)
++      return;
++
++   sample.vclk = AMDGPU_metricsClock(metrics, GPU_METRICS_V1_3_CURRENT_VCLK0);
++   sample.dclk = AMDGPU_metricsClock(metrics, GPU_METRICS_V1_3_CURRENT_DCLK0);
++}
++
++static void AMDGPU_clearValues(void) {
++   sample.gpuBusy = NAN;
++   sample.memBusy = NAN;
++   sample.vcnBusy = NAN;
++   sample.vramUsed = NAN;
++   sample.power = NAN;
++   sample.powerCap = NAN;
++   for (size_t i = 0; i < AMDGPU_TEMP_COUNT; i++)
++      sample.temp[i] = NAN;
++   sample.sclk = NAN;
++   sample.mclk = NAN;
++   sample.memRate = NAN;
++   sample.vclk = NAN;
++   sample.dclk = NAN;
++}
++
++static void AMDGPU_init(void) {
++   sample.status = AMDGPU_NOT_FOUND;
++   AMDGPU_clearValues();
++   sample.vramTotal = NAN;
++   sample.sclkPeak = NAN;
++   sample.mclkMax = NAN;
++   for (size_t i = 0; i < AMDGPU_TEMP_COUNT; i++)
++      sample.tempCrit[i] = NAN;
++
++   sample.card = AMDGPU_findCard();
++   if (!sample.card)
++      return;
++
++   xSnprintf(deviceDir, sizeof(deviceDir), AMDGPU_DEVICES_DIR "/%s", sample.pciAddress);
++   sample.status = AMDGPU_ACTIVE;
++   sample.sclkPeak = sample.card->sclkSeed;
++}
++
++/* Values that do not change while the card is up, read once it is known to be awake */
++static void AMDGPU_readStatic(void) {
++   sample.vramTotal = AMDGPU_readNumber(deviceDir, "mem_info_vram_total") / 1024.0;
++   sample.mclkMax = AMDGPU_readMclkMax();
++
++   if (!AMDGPU_findHwmon())
++      return;
++
++   for (size_t i = 0; i < AMDGPU_TEMP_COUNT; i++) {
++      tempIndex[i] = AMDGPU_findLabel("temp", AMDGPU_tempLabels[i]);
++      sample.tempCrit[i] = AMDGPU_readHwmon("temp", tempIndex[i], "crit") / 1000.0;
++   }
++   sclkIndex = AMDGPU_findLabel("freq", "sclk");
++   mclkIndex = AMDGPU_findLabel("freq", "mclk");
++}
++
++static void AMDGPU_refresh(void) {
++   AMDGPU_clearValues();
++
++   /* reading anything else would wake a runtime suspended card */
++   char status[32];
++   if (AMDGPU_readText(deviceDir, "power/runtime_status", status, sizeof(status)) && String_eq(status, "suspended")) {
++      sample.status = AMDGPU_SUSPENDED;
++      return;
++   }
++   sample.status = AMDGPU_ACTIVE;
++
++   if (!staticRead) {
++      staticRead = true;
++      AMDGPU_readStatic();
++   }
++
++   sample.gpuBusy = AMDGPU_readNumber(deviceDir, "gpu_busy_percent");
++   sample.memBusy = AMDGPU_readNumber(deviceDir, "mem_busy_percent");
++   sample.vcnBusy = AMDGPU_readNumber(deviceDir, "vcn_busy_percent");
++   sample.vramUsed = AMDGPU_readNumber(deviceDir, "mem_info_vram_used") / 1024.0;
++
++   if (hwmonDir[0]) {
++      sample.power = AMDGPU_readNumber(hwmonDir, "power1_average") / 1000000.0;
++      if (isNaN(sample.power))
++         sample.power = AMDGPU_readNumber(hwmonDir, "power1_input") / 1000000.0;
++      sample.powerCap = AMDGPU_readNumber(hwmonDir, "power1_cap") / 1000000.0;
++
++      for (size_t i = 0; i < AMDGPU_TEMP_COUNT; i++)
++         sample.temp[i] = AMDGPU_readHwmon("temp", tempIndex[i], "input") / 1000.0;
++
++      sample.sclk = AMDGPU_readHwmon("freq", sclkIndex, "input") / 1000000.0;
++      sample.mclk = AMDGPU_readHwmon("freq", mclkIndex, "input") / 1000000.0;
++   }
++
++   if (sample.sclk > sample.sclkPeak)
++      sample.sclkPeak = sample.sclk;
++   sample.memRate = sample.mclk * sample.card->memRateMultiplier / 1000.0;
++
++   AMDGPU_readMetrics();
++}
++
++const AMDGPUSample* AMDGPU_getSample(uint64_t monotonicMs) {
++   bool first = !initialized;
++   if (first) {
++      initialized = true;
++      AMDGPU_init();
++   }
++
++   if (sample.status != AMDGPU_NOT_FOUND && (first || monotonicMs > lastMonotonicMs)) {
++      AMDGPU_refresh();
++      lastMonotonicMs = monotonicMs;
++   }
++   return &sample;
++}
+diff --git a/linux/AMDGPU.h b/linux/AMDGPU.h
+new file mode 100644
+index 00000000..e23e3c3a
+--- /dev/null
++++ b/linux/AMDGPU.h
+@@ -0,0 +1,64 @@
++#ifndef HEADER_AMDGPU
++#define HEADER_AMDGPU
++/*
++htop - linux/AMDGPU.h
++(C) 2026 orlfman
++Released under the GNU GPLv2+, see the COPYING file
++in the source distribution for its full text.
++*/
++
++#include <stdint.h>
++
++
++typedef enum AMDGPUStatus_ {
++   AMDGPU_NOT_FOUND,
++   AMDGPU_SUSPENDED,
++   AMDGPU_ACTIVE,
++} AMDGPUStatus;
++
++typedef enum AMDGPUTemp_ {
++   AMDGPU_TEMP_EDGE,
++   AMDGPU_TEMP_JUNCTION,
++   AMDGPU_TEMP_MEM,
++   AMDGPU_TEMP_COUNT
++} AMDGPUTemp;
++
++typedef struct AMDGPUCard_ {
++   uint16_t deviceId;
++   const char* name;
++   unsigned int memRateMultiplier;   /* memory clock to data rate per pin (GDDR6: 16) */
++   double sclkSeed;                  /* MHz, initial maximum of the GPU clock bar */
++} AMDGPUCard;
++
++/* Every value is NAN when it is not available */
++typedef struct AMDGPUSample_ {
++   AMDGPUStatus status;
++   const AMDGPUCard* card;
++   char pciAddress[16];
++
++   double gpuBusy;                        /* percent */
++   double memBusy;                        /* percent, memory controller */
++   double vcnBusy;                        /* percent, video engine (encode and decode) */
++
++   double vramUsed;                       /* KiB */
++   double vramTotal;                      /* KiB */
++
++   double power;                          /* W */
++   double powerCap;                       /* W */
++
++   double temp[AMDGPU_TEMP_COUNT];        /* degree Celsius */
++   double tempCrit[AMDGPU_TEMP_COUNT];    /* degree Celsius */
++
++   double sclk;                           /* MHz */
++   double sclkPeak;                       /* MHz, highest seen, at least card->sclkSeed */
++   double mclk;                           /* MHz */
++   double mclkMax;                        /* MHz, top pp_dpm_mclk level */
++   double memRate;                        /* Gbps per pin */
++   double vclk;                           /* MHz */
++   double dclk;                           /* MHz */
++} AMDGPUSample;
++
++/* Sysfs is read at most once per monotonicMs value, so all AMDGPU meters share one read per refresh */
++const AMDGPUSample* AMDGPU_getSample(uint64_t monotonicMs);
++
++#endif /* HEADER_AMDGPU */

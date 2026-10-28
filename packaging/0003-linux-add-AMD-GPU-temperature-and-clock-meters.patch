@@ -1,0 +1,284 @@
+From f45e9ec71f349b7cde201f3344bf319da19e70be Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 14:44:35 -0700
+Subject: [PATCH 3/4] linux: add AMD GPU temperature and clock meters
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add three more RX 9070 XT meters, shown as text by default like the
+load average and task meters:
+
+- AMDGPUTemp ("GPU temp: edge:41°C junction:43°C mem:42°C") colors each
+  reading by how close it is to that sensor's critical limit: yellow
+  from 20 °C below it, red from 10 °C below. Bar and graph mode show the
+  junction temperature against its limit, and the bar takes its color,
+  switching attributes the same way LoadMeter does. Temperatures follow
+  the °C/°F setting.
+- AMDGPUClock ("GPU clock: 1487MHz"); bar and graph against the highest
+  clock seen so far, since pp_dpm_sclk reports a top level below the
+  card's actual boost clock.
+- AMDGPUMemClock ("VRAM clock: 772MHz 12.4Gbps busy:0%"): memory clock,
+  data rate per pin and memory controller load; bar and graph against
+  the top memory clock level.
+
+Temperatures are formatted with %.0f rather than an int cast, so a
+garbage sysfs value cannot overflow.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ linux/AMDGPUMeter.c | 192 ++++++++++++++++++++++++++++++++++++++++++++
+ linux/AMDGPUMeter.h |   6 ++
+ linux/Platform.c    |   3 +
+ 3 files changed, 201 insertions(+)
+
+diff --git a/linux/AMDGPUMeter.c b/linux/AMDGPUMeter.c
+index b477a97a..02fee4e0 100644
+--- a/linux/AMDGPUMeter.c
++++ b/linux/AMDGPUMeter.c
+@@ -19,6 +19,7 @@ in the source distribution for its full text.
+ #include "MeterMode.h"
+ #include "Object.h"
+ #include "RichString.h"
++#include "Settings.h"
+ #include "XUtils.h"
+ #include "linux/AMDGPU.h"
+ 
+@@ -35,6 +36,36 @@ static const int AMDGPUPowerMeter_attributes[] = {
+    BATTERY,
+ };
+ 
++static const int AMDGPUTempMeter_attributes[] = {
++   METER_VALUE_OK,
++};
++
++static const int AMDGPUTempMeter_warnAttributes[] = {
++   METER_VALUE_WARN,
++};
++
++static const int AMDGPUTempMeter_hotAttributes[] = {
++   METER_VALUE_ERROR,
++};
++
++static const int AMDGPUClockMeter_attributes[] = {
++   GPU_ENGINE_1,
++};
++
++static const int AMDGPUMemClockMeter_attributes[] = {
++   MEMORY_1,
++};
++
++static const char* const AMDGPUTempMeter_labels[AMDGPU_TEMP_COUNT] = {
++   [AMDGPU_TEMP_EDGE]     = "edge:",
++   [AMDGPU_TEMP_JUNCTION] = "junction:",
++   [AMDGPU_TEMP_MEM]      = "mem:",
++};
++
++/* Temperatures turn yellow and red this many degrees below the sensor's critical limit */
++#define AMDGPU_TEMP_WARN_MARGIN 20.0
++#define AMDGPU_TEMP_HOT_MARGIN  10.0
++
+ static const AMDGPUSample* AMDGPUMeter_getSample(const Meter* this) {
+    return AMDGPU_getSample(this->host->monotonicMs);
+ }
+@@ -130,6 +161,110 @@ static void AMDGPUPowerMeter_display(const Object* cast, RichString* out) {
+    RichString_appendAscii(out, CRT_colors[METER_VALUE], buffer);
+ }
+ 
++static ColorElements AMDGPUTempMeter_color(double temp, double crit) {
++   if (isNaN(temp))
++      return METER_VALUE;
++   if (!isPositive(crit) || temp < crit - AMDGPU_TEMP_WARN_MARGIN)
++      return METER_VALUE_OK;
++   if (temp < crit - AMDGPU_TEMP_HOT_MARGIN)
++      return METER_VALUE_WARN;
++
++   return METER_VALUE_ERROR;
++}
++
++static int AMDGPUTempMeter_format(const Meter* this, char* buffer, size_t size, double temp) {
++   if (isNaN(temp))
++      return xSnprintf(buffer, size, "N/A");
++   if (this->host->settings->degreeFahrenheit)
++      return xSnprintf(buffer, size, "%.0f%sF", temp * 9 / 5 + 32, CRT_degreeSign);
++
++   return xSnprintf(buffer, size, "%.0f%sC", temp, CRT_degreeSign);
++}
++
++/* Bar and graph show the junction (hotspot) temperature against its critical limit */
++static void AMDGPUTempMeter_updateValues(Meter* this) {
++   const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
++   double junction = sample->temp[AMDGPU_TEMP_JUNCTION];
++   double crit = sample->tempCrit[AMDGPU_TEMP_JUNCTION];
++   if (AMDGPUMeter_isUnavailable(this, sample, junction, crit))
++      return;
++
++   this->values[0] = junction;
++   this->total = crit;
++
++   // change bar color based on how close the junction is to its limit
++   ColorElements color = AMDGPUTempMeter_color(junction, crit);
++   if (color == METER_VALUE_ERROR)
++      this->curAttributes = AMDGPUTempMeter_hotAttributes;
++   else if (color == METER_VALUE_WARN)
++      this->curAttributes = AMDGPUTempMeter_warnAttributes;
++   else
++      this->curAttributes = AMDGPUTempMeter_attributes;
++
++   AMDGPUTempMeter_format(this, this->txtBuffer, sizeof(this->txtBuffer), junction);
++}
++
++static void AMDGPUTempMeter_display(const Object* cast, RichString* out) {
++   const Meter* this = (const Meter*)cast;
++   const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
++   if (sample->status != AMDGPU_ACTIVE) {
++      RichString_writeAscii(out, CRT_colors[METER_VALUE], this->txtBuffer);
++      return;
++   }
++
++   for (size_t i = 0; i < AMDGPU_TEMP_COUNT; i++) {
++      char buffer[50];
++      int len = AMDGPUTempMeter_format(this, buffer, sizeof(buffer), sample->temp[i]);
++      if (i)
++         RichString_appendAscii(out, CRT_colors[METER_TEXT], " ");
++      RichString_appendAscii(out, CRT_colors[METER_TEXT], AMDGPUTempMeter_labels[i]);
++      RichString_appendnWide(out, CRT_colors[AMDGPUTempMeter_color(sample->temp[i], sample->tempCrit[i])], buffer, len);
++   }
++}
++
++/* Bar and graph show the GPU clock against the highest one seen so far */
++static void AMDGPUClockMeter_updateValues(Meter* this) {
++   const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
++   if (AMDGPUMeter_isUnavailable(this, sample, sample->sclk, sample->sclkPeak))
++      return;
++
++   this->values[0] = sample->sclk;
++   this->total = sample->sclkPeak;
++   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%.0fMHz", this->values[0]);
++}
++
++static void AMDGPUClockMeter_display(const Object* cast, RichString* out) {
++   const Meter* this = (const Meter*)cast;
++   RichString_writeAscii(out, CRT_colors[METER_VALUE], this->txtBuffer);
++}
++
++/* Bar and graph show the memory clock against its top DPM level */
++static void AMDGPUMemClockMeter_updateValues(Meter* this) {
++   const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
++   if (AMDGPUMeter_isUnavailable(this, sample, sample->mclk, sample->mclkMax))
++      return;
++
++   this->values[0] = sample->mclk;
++   this->total = sample->mclkMax;
++   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%.0fMHz %.1fGbps", this->values[0], sample->memRate);
++}
++
++static void AMDGPUMemClockMeter_display(const Object* cast, RichString* out) {
++   const Meter* this = (const Meter*)cast;
++   const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
++   RichString_writeAscii(out, CRT_colors[METER_VALUE], this->txtBuffer);
++   if (sample->status != AMDGPU_ACTIVE)
++      return;
++
++   char buffer[50];
++   if (isNonnegative(sample->memBusy))
++      xSnprintf(buffer, sizeof(buffer), "%.0f%%", sample->memBusy);
++   else
++      xSnprintf(buffer, sizeof(buffer), "N/A");
++   RichString_appendAscii(out, CRT_colors[METER_TEXT], " busy:");
++   RichString_appendAscii(out, CRT_colors[METER_VALUE], buffer);
++}
++
+ const MeterClass AMDGPUUsageMeter_class = {
+    .super = {
+       .extends = Class(Meter),
+@@ -186,3 +321,60 @@ const MeterClass AMDGPUPowerMeter_class = {
+    .caption = "Pwr",
+    .description = "AMD GPU power draw / power limit"
+ };
++
++const MeterClass AMDGPUTempMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++      .display = AMDGPUTempMeter_display,
++   },
++   .updateValues = AMDGPUTempMeter_updateValues,
++   .defaultMode = TEXT_METERMODE,
++   .supportedModes = METERMODE_DEFAULT_SUPPORTED,
++   .maxItems = 1,
++   .isPercentChart = true,
++   .total = 100.0,
++   .attributes = AMDGPUTempMeter_attributes,
++   .name = "AMDGPUTemp",
++   .uiName = "AMD GPU temperatures",
++   .caption = "GPU temp: ",
++   .description = "AMD GPU edge, junction (hotspot) and memory temperatures"
++};
++
++const MeterClass AMDGPUClockMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++      .display = AMDGPUClockMeter_display,
++   },
++   .updateValues = AMDGPUClockMeter_updateValues,
++   .defaultMode = TEXT_METERMODE,
++   .supportedModes = METERMODE_DEFAULT_SUPPORTED,
++   .maxItems = 1,
++   .isPercentChart = true,
++   .total = 100.0,
++   .attributes = AMDGPUClockMeter_attributes,
++   .name = "AMDGPUClock",
++   .uiName = "AMD GPU clock",
++   .caption = "GPU clock: ",
++   .description = "AMD GPU shader clock"
++};
++
++const MeterClass AMDGPUMemClockMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++      .display = AMDGPUMemClockMeter_display,
++   },
++   .updateValues = AMDGPUMemClockMeter_updateValues,
++   .defaultMode = TEXT_METERMODE,
++   .supportedModes = METERMODE_DEFAULT_SUPPORTED,
++   .maxItems = 1,
++   .isPercentChart = true,
++   .total = 100.0,
++   .attributes = AMDGPUMemClockMeter_attributes,
++   .name = "AMDGPUMemClock",
++   .uiName = "AMD GPU VRAM clock",
++   .caption = "VRAM clock: ",
++   .description = "AMD GPU memory clock, data rate per pin and memory controller load"
++};
+diff --git a/linux/AMDGPUMeter.h b/linux/AMDGPUMeter.h
+index ec53cf1c..45d3a82a 100644
+--- a/linux/AMDGPUMeter.h
++++ b/linux/AMDGPUMeter.h
+@@ -16,4 +16,10 @@ extern const MeterClass AMDGPUVRAMMeter_class;
+ 
+ extern const MeterClass AMDGPUPowerMeter_class;
+ 
++extern const MeterClass AMDGPUTempMeter_class;
++
++extern const MeterClass AMDGPUClockMeter_class;
++
++extern const MeterClass AMDGPUMemClockMeter_class;
++
+ #endif /* HEADER_AMDGPUMeter */
+diff --git a/linux/Platform.c b/linux/Platform.c
+index 431218e4..d4015dce 100644
+--- a/linux/Platform.c
++++ b/linux/Platform.c
+@@ -284,6 +284,9 @@ const MeterClass* const Platform_meterTypes[] = {
+    &AMDGPUUsageMeter_class,
+    &AMDGPUVRAMMeter_class,
+    &AMDGPUPowerMeter_class,
++   &AMDGPUTempMeter_class,
++   &AMDGPUClockMeter_class,
++   &AMDGPUMemClockMeter_class,
+    NULL
+ };
+ 

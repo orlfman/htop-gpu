@@ -1,9 +1,11 @@
 # htop-gpu: plan
 
-Status (2026-10-28): steps 1–4 done, all 7 meters built, committed and pushed
-on `amdgpu-meters` (`0c74a6b7` sampler, `4875c09e` GPU usage / VRAM / power,
-`f45e9ec7` temperatures and clocks, `fe388c80` video engine). Nothing
-installed. Next: step 5 (packaging, install, header layout).
+Status (2026-10-28): steps 1–5 done. All 7 meters are committed and pushed on
+`amdgpu-meters` (`0c74a6b7` sampler, `4875c09e` GPU usage / VRAM / power,
+`f45e9ec7` temperatures and clocks, `fe388c80` video engine). htop-gpu 3.5.3-1
+is built from `packaging/` and installed, with the GPU column in the user's
+header; the packaging is committed and pushed. Next: step 6 items, only if
+wanted.
 
 In progress: nobody.
 
@@ -213,6 +215,8 @@ htop-gpu/                    git repo (ignores src/, test/, makepkg output)
     build-htop-fake.sh       htop binary that reads a fake-sysfs tree
     htop-capture.py          header text grouped by color (for checking colors)
     build-htop-asan.sh       whole htop with ASan + UBSan (optionally on fake-sysfs)
+    export-patches.sh        amdgpu-meters commits → packaging/*.patch + checksums
+    check-upstream.sh        is a newer htop out than the one htop-gpu is built on?
     gpu_metrics.py           gpu_metrics v1.3 decoder
     vcn_probe.py             runs a command, samples fdinfo + gpu_metrics
 ```
@@ -226,7 +230,15 @@ Dev loop:
 Package:
 
 - `pkgname=htop-gpu`, `provides=(htop)`, `conflicts=(htop)`.
-- Same signed upstream git tag as Arch, plus our patch with a checksum.
+- Same upstream git tag as Arch, plus the 4 `amdgpu-meters` commits as patch
+  files. `tools/export-patches.sh` writes them with `git format-patch` and
+  updates `_patches` and the checksums. The git source checksum `updpkgsums`
+  computes equals Arch's for htop 3.5.3 (`a4619a14…`), so the base is
+  byte-identical to upstream's tag.
+- `--without-libunwind`: configure picks libunwind up from any build machine that
+  has it (this one does), while Arch's clean chroot doesn't, so stock htop
+  doesn't link it. Pinned off to match. With that, `namcap` reports exactly what
+  it reports for the stock package (minus stock's old `GPL` license string).
 - Same configure flags as Arch: affinity, capabilities, delayacct, sensors,
   unicode. Arch also passes `--enable-openvz` and `--enable-vserver`, but 3.5.3's
   configure no longer knows them and ignores them, so ours drops them.
@@ -235,16 +247,21 @@ Package:
 - The PKGBUILD lives in `packaging/`, not the project root: without `BUILDDIR` /
   `SRCDEST`, makepkg unpacks into `src/` and clones into `htop/` next to the
   PKGBUILD, and `src/` would collide with the dev clone.
-- Install with `makepkg -si` from `packaging/`; pacman offers to replace `htop`.
+- Build with `makepkg -fC` in `packaging/`, install with
+  `sudo pacman -U packaging/htop-gpu-<ver>-x86_64.pkg.tar.zst`; pacman asks to
+  remove `htop`. Same file list as the stock package. `pacman -Q htop` then
+  answers `htop-gpu` (provides), so dependents stay satisfied.
 
 Rollback: `sudo pacman -S htop` swaps the repo build back in. Stock htop skips
 meter names it doesn't know and drops them from htoprc the next time it saves,
 so back up `htoprc` before switching.
 
 Updates: since the package name differs, `pacman -Syu` won't touch htop-gpu. It
-also won't update it. A small `tools/check-upstream` script compares
-`pacman -Si htop` against the installed version. When htop bumps: update
-`pkgver`, rebase the patch, rebuild.
+also won't update it. `tools/check-upstream.sh` shows the PKGBUILD's version, the
+installed htop-gpu, the repo htop and the newest upstream tag, and says when a
+newer htop is out. When htop bumps: rebase `amdgpu-meters` (see "Staying close
+to upstream"), run the checks, update `pkgver` (reset `pkgrel=1`), run
+`tools/export-patches.sh`, then build and install.
 
 ## Test plan
 
@@ -304,7 +321,13 @@ Meters (steps 2 to 4):
    while GPU usage read 5%). Fake: `sleep`, unknown `gpu_metrics` revision →
    `vclk:N/A dclk:N/A`, missing `vcn_busy_percent` → `N/A`. Then the full
    ASan + UBSan run with all 7 meters (see Test plan): no findings.
-5. `packaging/PKGBUILD`, install, rework the htop header layout.
+5. ~~`packaging/PKGBUILD`, install, rework the htop header layout.~~ Done
+   2026-10-28. htop-gpu 3.5.3-1 built and
+   installed in place of the repo htop (user's OK). The user chose the header:
+   `three_33_34_33` with P cores | E cores | a GPU column (usage, VRAM, power,
+   video as bars; temps, GPU clock, VRAM clock as text), the stock GPU meter
+   removed, captions kept. Previous htoprc saved as
+   `~/.config/htop/htoprc.bak-2026-10-28`.
 6. Later, if wanted: video engine process list, GTT in the VRAM meter, fan RPM,
    other cards.
 
@@ -321,7 +344,5 @@ Both GitHub repos are private for now. Before making them public:
 
 ## Open questions
 
-- Meter names and captions: keep the placeholders above or rename?
-- Header layout: the two columns already have 16 rows each (P cores + memory etc.
-  left, E cores right). Seven GPU meters could go under the E cores, replace the
-  stock GPU meter on the left, or get their own third column. Decide at step 5.
+None right now. Settled 2026-10-28: captions stay as in the meters table; the
+header is a third column for the GPU (see step 5).

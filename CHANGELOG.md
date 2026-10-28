@@ -3,6 +3,32 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Claude Code (Claude Opus 5.5): step 5
+
+- **Packaging:** `packaging/PKGBUILD` (Arch's htop PKGBUILD as `htop-gpu`,
+  provides/conflicts `htop`, SPDX `GPL-2.0-or-later`, version `3.5.3-1-gpu`)
+  plus the 4 commits as patches from new `tools/export-patches.sh`. The git
+  source checksum equals Arch's for 3.5.3. Built with the user's makepkg.conf
+  (`-march=arrowlake-s`), zero warnings, same file list as stock htop.
+- **Found and fixed:** the first build linked libunwind (installed here, absent
+  from Arch's chroot, so stock htop doesn't link it) → `--without-libunwind`.
+  `namcap` now matches the stock package's report.
+- **Installed** (user's OK, user typed sudo + confirmed): `sudo pacman -U` removed
+  `htop 3.5.3-1.1` and installed `htop-gpu 3.5.3-1`; `/usr/bin/htop --version` =
+  `3.5.3-1-gpu`. Packaged binary checked with all 7 meters against sysfs first.
+- **Header** (user's choices): `three_33_34_33`, P cores | E cores | GPU column
+  (GPU/VRM/Pwr/VCN bars, temps/clocks text), stock GPU meter removed, captions
+  kept. Backed up as `~/.config/htop/htoprc.bak-2026-10-28`; edited with htop
+  not running; previewed with the installed binary on a copy.
+- **New:** `tools/check-upstream.sh` (PKGBUILD / installed / repo / upstream
+  versions; currently "up to date", 3.5.3 everywhere).
+- **AGENTS.md:** htoprc rule relaxed to "only when the user asks, back up, htop
+  not running"; reinstalling htop-gpu needs the user's OK; packaging workflow.
+- **Committed and pushed** (user's OK): `packaging/` (PKGBUILD + 4 patches), the
+  two new tools and the doc changes, in one htop-gpu commit. `src/htop` unchanged.
+- **Next:** optional step 6 items (video engine process list, GTT, fan, other
+  cards) and the "Before going public" list.
+
 ## 2026-10-28, Claude Code (Claude Opus 5.5): step 4
 
 - **Meter:** `AMDGPUVideo` (`VCN:100% vclk:2933MHz dclk:2200MHz`) in

@@ -62,8 +62,12 @@ Only one agent works on the project at a time.
   change it.
 - Ask the user before installing packages, changing system configuration, or
   installing the built htop.
-- Never touch `~/.config/htop/htoprc`. htop rewrites its config file on exit, so
-  test runs use `HTOPRC=<this folder>/test/htoprc` (a copy; `test/` is ignored).
+- Don't touch `~/.config/htop/htoprc` unless the user asks. htop rewrites its
+  config file on exit, so test runs use `HTOPRC=<this folder>/test/<config>`
+  (`test/` is ignored). When the user does ask: back the file up first and make
+  sure no htop is running while editing it.
+- htop-gpu is the user's installed htop. Rebuilding or reinstalling it, or
+  going back to the repo htop, needs the user's OK.
 
 ## Checks
 
@@ -90,6 +94,12 @@ Visual checks of meters (htop is full-screen, so run it in a terminal you can se
   `ASAN_OPTIONS=log_path=<dir>/asan:detect_leaks=0` and
   `UBSAN_OPTIONS=log_path=<dir>/ubsan:print_stacktrace=1`; no files in `<dir>`
   means no findings.
+
+Packaging, after new commits in `src/htop`: `tools/export-patches.sh`
+regenerates `packaging/*.patch` and the PKGBUILD checksums; `makepkg -fC` in
+`packaging/` builds; `namcap` on the package should only report what it reports
+for the stock htop package. `tools/check-upstream.sh` tells when a newer htop is
+out.
 
 First-time setup when `src/htop/Makefile` is missing:
 

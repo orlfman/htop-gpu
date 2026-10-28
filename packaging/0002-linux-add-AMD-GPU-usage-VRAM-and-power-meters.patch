@@ -1,0 +1,288 @@
+From 4875c09e30cd8dfd8fe1b87d97e2378a1fe464a6 Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 14:31:49 -0700
+Subject: [PATCH 2/4] linux: add AMD GPU usage, VRAM and power meters
+
+Add three header meters for the RX 9070 XT, fed by the AMDGPU sampler:
+AMDGPUUsage (caption "GPU") shows the GPU busy percentage, AMDGPUVRAM
+("VRM") the used and total video memory, and AMDGPUPower ("Pwr") the
+power draw against the power limit. They follow SwapMeter's layout: one
+value against a total in bar and graph mode, and the values after the
+caption in text mode.
+
+The VRAM caption is "VRM" since bar and graph modes only draw the first
+three characters of a caption. A value that is not available shows
+"N/A", and a runtime suspended card shows "sleep". Existing colors are
+reused, so the color schemes stay untouched.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Makefile.am         |   2 +
+ linux/AMDGPUMeter.c | 188 ++++++++++++++++++++++++++++++++++++++++++++
+ linux/AMDGPUMeter.h |  19 +++++
+ linux/Platform.c    |   4 +
+ 4 files changed, 213 insertions(+)
+ create mode 100644 linux/AMDGPUMeter.c
+ create mode 100644 linux/AMDGPUMeter.h
+
+diff --git a/Makefile.am b/Makefile.am
+index 7a151202..8b642ccc 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -189,6 +189,7 @@ linux_platform_headers = \
+ 	generic/hostname.h \
+ 	generic/uname.h \
+ 	linux/AMDGPU.h \
++	linux/AMDGPUMeter.h \
+ 	linux/CGroupUtils.h \
+ 	linux/Compat.h \
+ 	linux/GPU.h \
+@@ -219,6 +220,7 @@ linux_platform_sources = \
+ 	generic/hostname.c \
+ 	generic/uname.c \
+ 	linux/AMDGPU.c \
++	linux/AMDGPUMeter.c \
+ 	linux/CGroupUtils.c \
+ 	linux/Compat.c \
+ 	linux/GPU.c \
+diff --git a/linux/AMDGPUMeter.c b/linux/AMDGPUMeter.c
+new file mode 100644
+index 00000000..b477a97a
+--- /dev/null
++++ b/linux/AMDGPUMeter.c
+@@ -0,0 +1,188 @@
++/*
++htop - linux/AMDGPUMeter.c
++(C) 2026 orlfman
++Released under the GNU GPLv2+, see the COPYING file
++in the source distribution for its full text.
++*/
++
++#include "config.h" // IWYU pragma: keep
++
++#include "linux/AMDGPUMeter.h"
++
++#include <math.h>
++#include <stdbool.h>
++#include <stddef.h>
++
++#include "CRT.h"
++#include "Macros.h"
++#include "Meter.h"
++#include "MeterMode.h"
++#include "Object.h"
++#include "RichString.h"
++#include "XUtils.h"
++#include "linux/AMDGPU.h"
++
++
++static const int AMDGPUUsageMeter_attributes[] = {
++   GPU_ENGINE_1,
++};
++
++static const int AMDGPUVRAMMeter_attributes[] = {
++   MEMORY_1,
++};
++
++static const int AMDGPUPowerMeter_attributes[] = {
++   BATTERY,
++};
++
++static const AMDGPUSample* AMDGPUMeter_getSample(const Meter* this) {
++   return AMDGPU_getSample(this->host->monotonicMs);
++}
++
++/* Puts "sleep" or "N/A" in the meter text if the card, the value or its total is not available */
++static bool AMDGPUMeter_isUnavailable(Meter* this, const AMDGPUSample* sample, double value, double total) {
++   if (sample->status == AMDGPU_ACTIVE && isNonnegative(value) && isPositive(total))
++      return false;
++
++   this->values[0] = NAN;
++   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%s", sample->status == AMDGPU_SUSPENDED ? "sleep" : "N/A");
++   return true;
++}
++
++/* Starts the text mode display after the caption; shows why and returns false if there is no value */
++static bool AMDGPUMeter_displayStart(const Meter* this, RichString* out) {
++   RichString_writeAscii(out, CRT_colors[METER_TEXT], ":");
++   if (isNonnegative(this->values[0]))
++      return true;
++
++   RichString_appendAscii(out, CRT_colors[METER_VALUE], this->txtBuffer);
++   return false;
++}
++
++static void AMDGPUUsageMeter_updateValues(Meter* this) {
++   const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
++   if (AMDGPUMeter_isUnavailable(this, sample, sample->gpuBusy, this->total))
++      return;
++
++   this->values[0] = sample->gpuBusy;
++   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%.0f%%", this->values[0]);
++}
++
++static void AMDGPUUsageMeter_display(const Object* cast, RichString* out) {
++   const Meter* this = (const Meter*)cast;
++   if (AMDGPUMeter_displayStart(this, out))
++      RichString_appendAscii(out, CRT_colors[METER_VALUE], this->txtBuffer);
++}
++
++static void AMDGPUVRAMMeter_updateValues(Meter* this) {
++   char* buffer = this->txtBuffer;
++   size_t size = sizeof(this->txtBuffer);
++   int written;
++
++   const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
++   if (AMDGPUMeter_isUnavailable(this, sample, sample->vramUsed, sample->vramTotal))
++      return;
++
++   this->values[0] = sample->vramUsed;
++   this->total = sample->vramTotal;
++
++   written = Meter_humanUnit(buffer, this->values[0], size);
++   METER_BUFFER_CHECK(buffer, size, written);
++
++   METER_BUFFER_APPEND_CHR(buffer, size, '/');
++
++   Meter_humanUnit(buffer, this->total, size);
++}
++
++static void AMDGPUVRAMMeter_display(const Object* cast, RichString* out) {
++   const Meter* this = (const Meter*)cast;
++   if (!AMDGPUMeter_displayStart(this, out))
++      return;
++
++   char buffer[50];
++   Meter_humanUnit(buffer, this->total, sizeof(buffer));
++   RichString_appendAscii(out, CRT_colors[METER_VALUE], buffer);
++   Meter_humanUnit(buffer, this->values[0], sizeof(buffer));
++   RichString_appendAscii(out, CRT_colors[METER_TEXT], " used:");
++   RichString_appendAscii(out, CRT_colors[METER_VALUE], buffer);
++}
++
++static void AMDGPUPowerMeter_updateValues(Meter* this) {
++   const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
++   if (AMDGPUMeter_isUnavailable(this, sample, sample->power, sample->powerCap))
++      return;
++
++   this->values[0] = sample->power;
++   this->total = sample->powerCap;
++   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%.0fW/%.0fW", this->values[0], this->total);
++}
++
++static void AMDGPUPowerMeter_display(const Object* cast, RichString* out) {
++   const Meter* this = (const Meter*)cast;
++   if (!AMDGPUMeter_displayStart(this, out))
++      return;
++
++   char buffer[50];
++   xSnprintf(buffer, sizeof(buffer), "%.0fW", this->values[0]);
++   RichString_appendAscii(out, CRT_colors[METER_VALUE], buffer);
++   xSnprintf(buffer, sizeof(buffer), "%.0fW", this->total);
++   RichString_appendAscii(out, CRT_colors[METER_TEXT], " cap:");
++   RichString_appendAscii(out, CRT_colors[METER_VALUE], buffer);
++}
++
++const MeterClass AMDGPUUsageMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++      .display = AMDGPUUsageMeter_display,
++   },
++   .updateValues = AMDGPUUsageMeter_updateValues,
++   .defaultMode = BAR_METERMODE,
++   .supportedModes = METERMODE_DEFAULT_SUPPORTED,
++   .maxItems = 1,
++   .isPercentChart = true,
++   .total = 100.0,
++   .attributes = AMDGPUUsageMeter_attributes,
++   .name = "AMDGPUUsage",
++   .uiName = "AMD GPU usage",
++   .caption = "GPU",
++   .description = "AMD GPU busy percentage"
++};
++
++const MeterClass AMDGPUVRAMMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++      .display = AMDGPUVRAMMeter_display,
++   },
++   .updateValues = AMDGPUVRAMMeter_updateValues,
++   .defaultMode = BAR_METERMODE,
++   .supportedModes = METERMODE_DEFAULT_SUPPORTED,
++   .maxItems = 1,
++   .isPercentChart = true,
++   .total = 100.0,
++   .attributes = AMDGPUVRAMMeter_attributes,
++   .name = "AMDGPUVRAM",
++   .uiName = "AMD GPU VRAM",
++   .caption = "VRM",
++   .description = "AMD GPU video memory used / total"
++};
++
++const MeterClass AMDGPUPowerMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++      .display = AMDGPUPowerMeter_display,
++   },
++   .updateValues = AMDGPUPowerMeter_updateValues,
++   .defaultMode = BAR_METERMODE,
++   .supportedModes = METERMODE_DEFAULT_SUPPORTED,
++   .maxItems = 1,
++   .isPercentChart = true,
++   .total = 100.0,
++   .attributes = AMDGPUPowerMeter_attributes,
++   .name = "AMDGPUPower",
++   .uiName = "AMD GPU power",
++   .caption = "Pwr",
++   .description = "AMD GPU power draw / power limit"
++};
+diff --git a/linux/AMDGPUMeter.h b/linux/AMDGPUMeter.h
+new file mode 100644
+index 00000000..ec53cf1c
+--- /dev/null
++++ b/linux/AMDGPUMeter.h
+@@ -0,0 +1,19 @@
++#ifndef HEADER_AMDGPUMeter
++#define HEADER_AMDGPUMeter
++/*
++htop - linux/AMDGPUMeter.h
++(C) 2026 orlfman
++Released under the GNU GPLv2+, see the COPYING file
++in the source distribution for its full text.
++*/
++
++#include "Meter.h"
++
++
++extern const MeterClass AMDGPUUsageMeter_class;
++
++extern const MeterClass AMDGPUVRAMMeter_class;
++
++extern const MeterClass AMDGPUPowerMeter_class;
++
++#endif /* HEADER_AMDGPUMeter */
+diff --git a/linux/Platform.c b/linux/Platform.c
+index dd4121e8..431218e4 100644
+--- a/linux/Platform.c
++++ b/linux/Platform.c
+@@ -48,6 +48,7 @@ in the source distribution for its full text.
+ #include "SysArchMeter.h"
+ #include "TasksMeter.h"
+ #include "UptimeMeter.h"
++#include "linux/AMDGPUMeter.h"
+ #include "linux/Compat.h"
+ #include "linux/IOPriority.h"
+ #include "linux/IOPriorityPanel.h"
+@@ -280,6 +281,9 @@ const MeterClass* const Platform_meterTypes[] = {
+    &OpenRCUserMeter_class,
+    &FileDescriptorMeter_class,
+    &GPUMeter_class,
++   &AMDGPUUsageMeter_class,
++   &AMDGPUVRAMMeter_class,
++   &AMDGPUPowerMeter_class,
+    NULL
+ };
+ 

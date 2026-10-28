@@ -1,0 +1,120 @@
+From fe388c80ee8b1f0393bbcebd202cc0d6daa9c75b Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 15:01:33 -0700
+Subject: [PATCH 4/4] linux: add AMD GPU video engine meter
+
+Add AMDGPUVideo ("VCN:100% vclk:2933MHz dclk:2200MHz"), the busy
+percentage of the RX 9070 XT's video engine with its video and decoder
+clocks. RDNA 4 runs encode and decode through one shared video queue
+and the kernel reports a single busy percentage for it, so one meter
+covers both.
+
+Like the GPU usage meter it is a bar by default; the clocks come from
+gpu_metrics and show N/A when that table has an unknown layout.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ linux/AMDGPUMeter.c | 54 +++++++++++++++++++++++++++++++++++++++++++++
+ linux/AMDGPUMeter.h |  2 ++
+ linux/Platform.c    |  1 +
+ 3 files changed, 57 insertions(+)
+
+diff --git a/linux/AMDGPUMeter.c b/linux/AMDGPUMeter.c
+index 02fee4e0..4e362e8e 100644
+--- a/linux/AMDGPUMeter.c
++++ b/linux/AMDGPUMeter.c
+@@ -56,6 +56,10 @@ static const int AMDGPUMemClockMeter_attributes[] = {
+    MEMORY_1,
+ };
+ 
++static const int AMDGPUVideoMeter_attributes[] = {
++   GPU_ENGINE_4,
++};
++
+ static const char* const AMDGPUTempMeter_labels[AMDGPU_TEMP_COUNT] = {
+    [AMDGPU_TEMP_EDGE]     = "edge:",
+    [AMDGPU_TEMP_JUNCTION] = "junction:",
+@@ -265,6 +269,37 @@ static void AMDGPUMemClockMeter_display(const Object* cast, RichString* out) {
+    RichString_appendAscii(out, CRT_colors[METER_VALUE], buffer);
+ }
+ 
++/* Encode and decode share one video engine queue on RDNA 4, so there is one busy percentage for both */
++static void AMDGPUVideoMeter_updateValues(Meter* this) {
++   const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
++   if (AMDGPUMeter_isUnavailable(this, sample, sample->vcnBusy, this->total))
++      return;
++
++   this->values[0] = sample->vcnBusy;
++   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%.0f%%", this->values[0]);
++}
++
++static void AMDGPUVideoMeter_appendClock(RichString* out, const char* label, double clock) {
++   char buffer[50];
++   if (isNonnegative(clock))
++      xSnprintf(buffer, sizeof(buffer), "%.0fMHz", clock);
++   else
++      xSnprintf(buffer, sizeof(buffer), "N/A");
++   RichString_appendAscii(out, CRT_colors[METER_TEXT], label);
++   RichString_appendAscii(out, CRT_colors[METER_VALUE], buffer);
++}
++
++static void AMDGPUVideoMeter_display(const Object* cast, RichString* out) {
++   const Meter* this = (const Meter*)cast;
++   if (!AMDGPUMeter_displayStart(this, out))
++      return;
++
++   const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
++   RichString_appendAscii(out, CRT_colors[METER_VALUE], this->txtBuffer);
++   AMDGPUVideoMeter_appendClock(out, " vclk:", sample->vclk);
++   AMDGPUVideoMeter_appendClock(out, " dclk:", sample->dclk);
++}
++
+ const MeterClass AMDGPUUsageMeter_class = {
+    .super = {
+       .extends = Class(Meter),
+@@ -378,3 +413,22 @@ const MeterClass AMDGPUMemClockMeter_class = {
+    .caption = "VRAM clock: ",
+    .description = "AMD GPU memory clock, data rate per pin and memory controller load"
+ };
++
++const MeterClass AMDGPUVideoMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++      .display = AMDGPUVideoMeter_display,
++   },
++   .updateValues = AMDGPUVideoMeter_updateValues,
++   .defaultMode = BAR_METERMODE,
++   .supportedModes = METERMODE_DEFAULT_SUPPORTED,
++   .maxItems = 1,
++   .isPercentChart = true,
++   .total = 100.0,
++   .attributes = AMDGPUVideoMeter_attributes,
++   .name = "AMDGPUVideo",
++   .uiName = "AMD GPU video engine",
++   .caption = "VCN",
++   .description = "AMD GPU video engine (encode and decode) busy percentage and clocks"
++};
+diff --git a/linux/AMDGPUMeter.h b/linux/AMDGPUMeter.h
+index 45d3a82a..7992c4be 100644
+--- a/linux/AMDGPUMeter.h
++++ b/linux/AMDGPUMeter.h
+@@ -22,4 +22,6 @@ extern const MeterClass AMDGPUClockMeter_class;
+ 
+ extern const MeterClass AMDGPUMemClockMeter_class;
+ 
++extern const MeterClass AMDGPUVideoMeter_class;
++
+ #endif /* HEADER_AMDGPUMeter */
+diff --git a/linux/Platform.c b/linux/Platform.c
+index d4015dce..b286d4c2 100644
+--- a/linux/Platform.c
++++ b/linux/Platform.c
+@@ -287,6 +287,7 @@ const MeterClass* const Platform_meterTypes[] = {
+    &AMDGPUTempMeter_class,
+    &AMDGPUClockMeter_class,
+    &AMDGPUMemClockMeter_class,
++   &AMDGPUVideoMeter_class,
+    NULL
+ };
+ 
