@@ -1,4 +1,4 @@
-From 0c74a6b7cf9a8207c991a4599270678d0203e4f8 Mon Sep 17 00:00:00 2001
+From 50714d790bd40213a12228eb737c5659b6cd58bd Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 14:08:49 -0700
 Subject: [PATCH 1/5] linux: add AMDGPU sysfs sampler for RX 9070 XT meters
@@ -16,15 +16,22 @@ between boots. All meters share one sample that is read at most once
 per refresh. Nothing is read while the card is runtime suspended, as
 reading hwmon or pp_dpm_mclk would wake it up.
 
+Discovery is retried rather than done once: while no card is found it
+is looked for on every refresh, a card that is no longer bound to
+amdgpu is forgotten and looked for again, and the hwmon directory is
+searched until it exists and again whenever it goes away (e.g. when it
+is renumbered). The meters thus recover when amdgpu binds the card or
+re-registers hwmon after htop started.
+
 AMDGPU_SYSFS_ROOT allows pointing the sampler at a fake sysfs tree for
 testing; htop itself always uses /sys.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  Makefile.am    |   2 +
- linux/AMDGPU.c | 333 +++++++++++++++++++++++++++++++++++++++++++++++++
- linux/AMDGPU.h |  64 ++++++++++
- 3 files changed, 399 insertions(+)
+ linux/AMDGPU.c | 361 +++++++++++++++++++++++++++++++++++++++++++++++++
+ linux/AMDGPU.h |  64 +++++++++
+ 3 files changed, 427 insertions(+)
  create mode 100644 linux/AMDGPU.c
  create mode 100644 linux/AMDGPU.h
 
@@ -50,10 +57,10 @@ index 115a07e8..7a151202 100644
  	linux/GPU.c \
 diff --git a/linux/AMDGPU.c b/linux/AMDGPU.c
 new file mode 100644
-index 00000000..972a920f
+index 00000000..150fc6e6
 --- /dev/null
 +++ b/linux/AMDGPU.c
-@@ -0,0 +1,333 @@
+@@ -0,0 +1,361 @@
 +/*
 +htop - linux/AMDGPU.c
 +(C) 2026 orlfman
@@ -72,6 +79,7 @@ index 00000000..972a920f
 +#include <stdint.h>
 +#include <stdlib.h>
 +#include <string.h>
++#include <unistd.h>
 +#include <sys/types.h>
 +
 +#include "Macros.h"
@@ -110,6 +118,7 @@ index 00000000..972a920f
 +static bool initialized;
 +static bool staticRead;
 +static char deviceDir[1024];
++static char driverLink[1024];
 +static char hwmonDir[1024];
 +static unsigned int tempIndex[AMDGPU_TEMP_COUNT];   /* hwmon tempN, 0 if missing */
 +static unsigned int sclkIndex;                      /* hwmon freqN, 0 if missing */
@@ -299,8 +308,11 @@ index 00000000..972a920f
 +   sample.dclk = NAN;
 +}
 +
-+static void AMDGPU_init(void) {
++/* Back to "no card": every value and everything found about the card is dropped */
++static void AMDGPU_forget(void) {
 +   sample.status = AMDGPU_NOT_FOUND;
++   sample.card = NULL;
++   sample.pciAddress[0] = '\0';
 +   AMDGPU_clearValues();
 +   sample.vramTotal = NAN;
 +   sample.sclkPeak = NAN;
@@ -308,22 +320,36 @@ index 00000000..972a920f
 +   for (size_t i = 0; i < AMDGPU_TEMP_COUNT; i++)
 +      sample.tempCrit[i] = NAN;
 +
++   staticRead = false;
++   hwmonDir[0] = '\0';
++}
++
++/* Looks for the card from scratch; done again on every refresh for as long as none is found */
++static void AMDGPU_init(void) {
++   AMDGPU_forget();
++
 +   sample.card = AMDGPU_findCard();
 +   if (!sample.card)
 +      return;
 +
 +   xSnprintf(deviceDir, sizeof(deviceDir), AMDGPU_DEVICES_DIR "/%s", sample.pciAddress);
++   xSnprintf(driverLink, sizeof(driverLink), AMDGPU_DRIVER_DIR "/%s", sample.pciAddress);
 +   sample.status = AMDGPU_ACTIVE;
 +   sample.sclkPeak = sample.card->sclkSeed;
 +}
 +
-+/* Values that do not change while the card is up, read once it is known to be awake */
-+static void AMDGPU_readStatic(void) {
++/* Values that do not change while the card is up, read once it is known to be awake.
++   Returns false while there is no hwmon directory, so the next refresh tries again. */
++static bool AMDGPU_readStatic(void) {
 +   sample.vramTotal = AMDGPU_readNumber(deviceDir, "mem_info_vram_total") / 1024.0;
 +   sample.mclkMax = AMDGPU_readMclkMax();
++   for (size_t i = 0; i < AMDGPU_TEMP_COUNT; i++)
++      sample.tempCrit[i] = NAN;
 +
-+   if (!AMDGPU_findHwmon())
-+      return;
++   if (!AMDGPU_findHwmon()) {
++      hwmonDir[0] = '\0';
++      return false;
++   }
 +
 +   for (size_t i = 0; i < AMDGPU_TEMP_COUNT; i++) {
 +      tempIndex[i] = AMDGPU_findLabel("temp", AMDGPU_tempLabels[i]);
@@ -331,10 +357,17 @@ index 00000000..972a920f
 +   }
 +   sclkIndex = AMDGPU_findLabel("freq", "sclk");
 +   mclkIndex = AMDGPU_findLabel("freq", "mclk");
++   return true;
 +}
 +
 +static void AMDGPU_refresh(void) {
 +   AMDGPU_clearValues();
++
++   /* unbound from amdgpu or removed: forget it, the next refresh looks for a card again */
++   if (access(driverLink, F_OK) != 0) {
++      AMDGPU_forget();
++      return;
++   }
 +
 +   /* reading anything else would wake a runtime suspended card */
 +   char status[32];
@@ -344,10 +377,11 @@ index 00000000..972a920f
 +   }
 +   sample.status = AMDGPU_ACTIVE;
 +
-+   if (!staticRead) {
-+      staticRead = true;
-+      AMDGPU_readStatic();
-+   }
++   /* hwmon can be replaced while the card stays, e.g. renumbered: look for it again then */
++   if (staticRead && access(hwmonDir, F_OK) != 0)
++      staticRead = false;
++   if (!staticRead)
++      staticRead = AMDGPU_readStatic();
 +
 +   sample.gpuBusy = AMDGPU_readNumber(deviceDir, "gpu_busy_percent");
 +   sample.memBusy = AMDGPU_readNumber(deviceDir, "mem_busy_percent");
@@ -375,16 +409,17 @@ index 00000000..972a920f
 +}
 +
 +const AMDGPUSample* AMDGPU_getSample(uint64_t monotonicMs) {
-+   bool first = !initialized;
-+   if (first) {
-+      initialized = true;
-+      AMDGPU_init();
-+   }
++   if (initialized && monotonicMs <= lastMonotonicMs)
++      return &sample;
 +
-+   if (sample.status != AMDGPU_NOT_FOUND && (first || monotonicMs > lastMonotonicMs)) {
++   initialized = true;
++   lastMonotonicMs = monotonicMs;
++
++   /* e.g. amdgpu binds the card only after htop started */
++   if (sample.status == AMDGPU_NOT_FOUND)
++      AMDGPU_init();
++   if (sample.status != AMDGPU_NOT_FOUND)
 +      AMDGPU_refresh();
-+      lastMonotonicMs = monotonicMs;
-+   }
 +   return &sample;
 +}
 diff --git a/linux/AMDGPU.h b/linux/AMDGPU.h

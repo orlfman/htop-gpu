@@ -311,6 +311,50 @@ def main():
         rc, err = s.close()
         check("clean exit (ASan/UBSan)", rc == 0 and not err.strip(), err.strip()[:400])
 
+        # ----- recovery: the tree changes under ONE running sampler (AUDIT.md finding 2) -----
+        def recovery(name, before, change, want_before, after=None, want_after=expected):
+            print(f"[recovery: {name}]")
+            shutil.rmtree(root, ignore_errors=True)
+            shutil.copytree(base, root, symlinks=True)
+            if before:
+                before(root)
+            s = Sampler(fake_bin)
+            d = diff(s.sample(100), want_before(root))
+            check("first sample", not d, json.dumps(d))
+            change(root)
+            d = diff(s.sample(200), want_after(root))
+            check("after the change", not d, json.dumps(d))
+            if after:
+                after(root)
+                d = diff(s.sample(300), expected(root))
+                check("after changing back", not d, json.dumps(d))
+            rc, err = s.close()
+            check("clean exit (ASan/UBSan)", rc == 0 and not err.strip(), err.strip()[:400])
+
+        def hide_hwmon(r):
+            os.rename(f"{dev(r)}/hwmon", f"{r}/hwmon.hidden")
+
+        def restore_hwmon(r):
+            os.rename(f"{r}/hwmon.hidden", f"{dev(r)}/hwmon")
+
+        def renumber_hwmon(r):
+            h = hwmon_dir(dev(r))
+            os.rename(h, os.path.join(os.path.dirname(h), "hwmon99"))
+
+        link = f"bus/pci/drivers/amdgpu/{PCI}"
+
+        def unbind(r):
+            os.remove(f"{r}/{link}")
+
+        def rebind(r):
+            os.symlink(f"../../devices/{PCI}", f"{r}/{link}")
+
+        recovery("hwmon missing at start, appears later", hide_hwmon, restore_hwmon, expected)
+        recovery("hwmon renumbered while running", None, renumber_hwmon, expected)
+        recovery("card bound only after start", unbind, rebind, lambda r: not_found())
+        recovery("card unbound while running, then bound again", None, unbind, expected,
+                 after=rebind, want_after=lambda r: not_found())
+
         # ----- 4. live -----
         print("[live /sys: idle plausibility]")
         s = Sampler(live_bin)

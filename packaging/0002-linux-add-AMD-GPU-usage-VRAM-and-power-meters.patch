@@ -1,4 +1,4 @@
-From 4875c09e30cd8dfd8fe1b87d97e2378a1fe464a6 Mon Sep 17 00:00:00 2001
+From 75dce0708a24b56d5aa255a3d16132d8920bc5b3 Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 14:31:49 -0700
 Subject: [PATCH 2/5] linux: add AMD GPU usage, VRAM and power meters

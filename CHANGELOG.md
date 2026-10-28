@@ -3,6 +3,30 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Claude Code (Claude Opus 5.5): fixed Codex's audit findings
+
+- **Codex audit** (`AUDIT.md`, by Codex, read-only audit): 3 P2 findings. Each
+  reproduced independently first, then a regression test that failed on the
+  audited code, then the fix. Details in AUDIT.md's Resolution section.
+- **1. Seeding from read-only / symlinked stock configs** → stock files read
+  with `checkWritability` off (`Settings.c`). `test-config-path.sh` 16 → 33 checks.
+- **2. Discovery never recovered** → card looked for again while missing and
+  after its driver link disappears; hwmon re-searched until found and when it
+  goes away (`linux/AMDGPU.c`). 4 recovery cases in `test-sampler.py` under one
+  running sampler.
+- **3. Style check passed with broken tools** → tool presence check, IWYU
+  `--error=3` exit codes, astyle failure = tool failure; exit 0/1/2. New
+  `tools/test-check-style.sh`.
+- **History rewrite (user's choice):** fixes squashed into their commits with
+  `amend!` commits + `git rebase --autosquash`, force-pushed with lease.
+  Old → new: `0c74a6b7`→`50714d79`, `4875c09e`→`75dce070`, `f45e9ec7`→`0f0243a9`,
+  `fe388c80`→`e4d2444b`, `7d510f17`→`8717c760`. Older entries below still name
+  the old hashes. Final tree = pre-squash tip; each commit builds, 0 warnings.
+- **Installed** `htop-gpu 3.5.3-3` (user typed sudo); checked on the real
+  config, which stayed unchanged; `pacman -Qkk` clean; stock htop untouched.
+- **Checks:** build clean, `STYLE OK`, all three suites `ALL PASSED`, ASan +
+  UBSan run (config-path suite + live meters) with no reports.
+
 ## 2026-10-28, Claude Code (Claude Opus 5.5): own config, side by side with stock htop
 
 - **User's request:** htop-gpu gets its own config in an XDG folder named

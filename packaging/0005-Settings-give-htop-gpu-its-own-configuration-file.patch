@@ -1,4 +1,4 @@
-From 7d510f173e9194e6b8a170b2f6e5db72e781d078 Mon Sep 17 00:00:00 2001
+From 8717c760aea42110b7c2326f186268998df90413 Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 15:29:29 -0700
 Subject: [PATCH 5/5] Settings: give htop-gpu its own configuration file
@@ -12,17 +12,20 @@ Without its own file yet, htop-gpu starts from stock htop's
 configuration (~/.config/htop/htoprc, then ~/.htoprc) and saves that as
 htop-gpurc. Stock htop's files are only read, never changed; in
 particular ~/.htoprc is no longer moved and deleted, since it belongs to
-stock htop. $HTOPRC and the system-wide fallback work as before. The man
-page describes the new location.
+stock htop. They are opened read-only, without the writability check
+htop does for its own file, so a read-only or symlinked stock file (as
+dotfile managers make them) is still used and does not stop htop-gpu
+from saving its own file. $HTOPRC and the system-wide fallback work as
+before. The man page describes the new location.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- Settings.c | 32 ++++++++++++++++++++------------
+ Settings.c | 34 ++++++++++++++++++++++------------
  htop.1.in  | 16 +++++++++++++---
- 2 files changed, 33 insertions(+), 15 deletions(-)
+ 2 files changed, 35 insertions(+), 15 deletions(-)
 
 diff --git a/Settings.c b/Settings.c
-index 44204244..13a05e57 100644
+index 44204244..ef6017b4 100644
 --- a/Settings.c
 +++ b/Settings.c
 @@ -958,6 +958,7 @@ Settings* Settings_new(const Machine* host, Hashtable* dynamicMeters, Hashtable*
@@ -53,7 +56,7 @@ index 44204244..13a05e57 100644
        }
        (void) mkdir(configDir, 0700);
        (void) mkdir(htopDir, 0700);
-@@ -1000,14 +1003,18 @@ Settings* Settings_new(const Machine* host, Hashtable* dynamicMeters, Hashtable*
+@@ -1000,14 +1003,20 @@ Settings* Settings_new(const Machine* host, Hashtable* dynamicMeters, Hashtable*
     this->delay = DEFAULT_DELAY;
  
     bool ok = Settings_read(this, this->filename, host, /*checkWritability*/true);
@@ -68,19 +71,21 @@ index 44204244..13a05e57 100644
 +
 +   /* htop-gpu keeps its own configuration, so it can be installed next to stock htop.
 +      Without one yet, start from stock htop's configuration and save that as ours.
-+      Stock htop's files are left untouched, since stock htop may still use them. */
++      Stock htop's files are left untouched, since stock htop may still use them, and
++      only read: whether they are writable or symlinks must not decide whether htop-gpu
++      can save its own file. */
 +   const char* const stockFiles[] = { stockRcfile, legacyDotfile };
 +   for (size_t i = 0; !ok && i < ARRAYSIZE(stockFiles); i++) {
 +      if (!stockFiles[i])
 +         continue;
 +
-+      ok = Settings_read(this, stockFiles[i], host, this->writeConfig);
++      ok = Settings_read(this, stockFiles[i], host, /*checkWritability*/false);
 +      if (ok && this->writeConfig)
 +         Settings_write(this, false);
     }
     if (!ok) {
        this->screenTabs = true;
-@@ -1025,6 +1032,7 @@ Settings* Settings_new(const Machine* host, Hashtable* dynamicMeters, Hashtable*
+@@ -1025,6 +1034,7 @@ Settings* Settings_new(const Machine* host, Hashtable* dynamicMeters, Hashtable*
  
     this->lastUpdate = 1;
  

@@ -1,11 +1,12 @@
 # htop-gpu: plan
 
-Status (2026-10-28): steps 1–5 done. `amdgpu-meters` = `0c74a6b7` sampler,
-`4875c09e` GPU usage / VRAM / power, `f45e9ec7` temperatures and clocks,
-`fe388c80` video engine, `7d510f17` own config file; all pushed. htop-gpu
-3.5.3-2 is installed as `htop-gpu` next to the repo `htop`, each with its own
+Status (2026-10-28): steps 1–5 done. `amdgpu-meters` = `50714d79` sampler,
+`75dce070` GPU usage / VRAM / power, `0f0243a9` temperatures and clocks,
+`e4d2444b` video engine, `8717c760` own config file; all pushed. htop-gpu
+3.5.3-3 is installed as `htop-gpu` next to the repo `htop`, each with its own
 config (`~/.config/htop-gpu/htop-gpurc` with the GPU column, `~/.config/htop/htoprc`
-two columns). Next: step 6 items, only if wanted.
+two columns). Codex's `AUDIT.md` findings (3) are fixed, see its Resolution
+section. Next: step 6 items, only if wanted.
 
 In progress: nobody.
 
@@ -32,7 +33,9 @@ new htop releases easy to pick up:
   3-space indent, `Module_function()` names, `static` unless public API, no
   function-like macros, `String_*` helpers from `XUtils.h`, plain C99. Every file
   includes headers for everything it uses directly, in upstream's include order.
-- **Style check:** `tools/check-style.sh` must print `STYLE OK`. It runs
+- **Style check:** `tools/check-style.sh` must print `STYLE OK` (exit 0; 1 means
+  findings, 2 means a tool is missing or failed, checked by
+  `tools/test-check-style.sh`). It runs
   include-what-you-use with upstream's `iwyu/htop.imp` mapping and upstream's
   astyle baseline (`astyle -n -xb -s3 -p -xg -c -k1 -W1 -H`, shown as a diff,
   files untouched). It only checks the files htop-gpu adds on top of the upstream
@@ -217,7 +220,8 @@ htop-gpu/                    git repo (ignores src/, test/, makepkg output)
     build-htop-asan.sh       whole htop with ASan + UBSan (optionally on fake-sysfs)
     export-patches.sh        amdgpu-meters commits → packaging/*.patch + checksums
     check-upstream.sh        is a newer htop out than the one htop-gpu is built on?
-    test-config-path.sh      own htop-gpurc, seeding, stock files untouched (16 checks)
+    test-config-path.sh      own htop-gpurc, seeding (incl. read-only/symlinked stock), 33 checks
+    test-check-style.sh      check-style.sh fails on findings (1) and broken tools (2)
     gpu_metrics.py           gpu_metrics v1.3 decoder
     vcn_probe.py             runs a command, samples fdinfo + gpu_metrics
 ```
@@ -236,7 +240,7 @@ Package:
   Name/Icon/Exec changed, `htop-gpu` icons) and fails if a file named like stock
   htop's is left over. No `provides`/`conflicts`. `3.5.3-1` replaced htop
   instead.
-- Own config: commit `7d510f17` makes htop-gpu read
+- Own config: commit `8717c760` makes htop-gpu read
   `~/.config/htop-gpu/htop-gpurc` (`$XDG_CONFIG_HOME/htop-gpu/htop-gpurc`).
   Without one yet it starts from stock htop's `~/.config/htop/htoprc`, then
   `~/.htoprc`, and saves that as its own. Stock files are only read, never
@@ -286,6 +290,9 @@ Sampler (done, `python3 -I tools/test-sampler.py`, about 30 s):
   not bound, no driver dir.
 - Cache: same or older timestamp never re-reads; a card that starts suspended
   gets its values once awake.
+- Recovery inside ONE running sampler (added for AUDIT.md finding 2): hwmon
+  missing at start then appearing, hwmon renumbered, card bound only after start,
+  card unbound and rebound; each must match the full expected sample.
 - Live: idle plausibility, then a VA-API H.264 encode must push the video engine
   to ≥ 50% and vclk/dclk to ≥ 1000 MHz (got 100%, 2933 / 2200 MHz).
 - Everything runs under ASan + UBSan. Checked that the suite catches bugs: three
@@ -315,17 +322,17 @@ Meters (steps 2 to 4):
    commit (`linux: add AMDGPU sysfs sampler for RX 9070 XT meters`). Dev build: `./configure --prefix=/usr --sysconfdir=/etc
    --enable-affinity --enable-capabilities --enable-delayacct --enable-sensors
    --enable-unicode --enable-debug && make`.
-2. ~~GPU usage, VRAM, power meters.~~ Done 2026-10-28, commit `4875c09e`: `linux/AMDGPUMeter.{c,h}`
+2. ~~GPU usage, VRAM, power meters.~~ Done 2026-10-28, commit `75dce070`: `linux/AMDGPUMeter.{c,h}`
    (3 classes, modeled on `SwapMeter.c`, upstream colors `GPU_ENGINE_1`,
    `MEMORY_1`, `BATTERY`), registered after `GPUMeter_class` in
    `linux/Platform.c`. Checked live in all 4 modes against sysfs (idle and under a
    VA-API encode load) and on fake trees (`sleep`, partial `N/A`, card missing).
-3. ~~Temps and both clock meters.~~ Done 2026-10-28, commit `f45e9ec7`:
+3. ~~Temps and both clock meters.~~ Done 2026-10-28, commit `0f0243a9`:
    `AMDGPUTemp`, `AMDGPUClock`, `AMDGPUMemClock` added to `linux/AMDGPUMeter.c`
    and registered after the step 2 meters. Checked live in all 4 modes, in °F,
    idle and under load against sysfs, colors with `tools/htop-capture.py` on fake
    hot temps, and `sleep` / partial `N/A` / missing card on fake trees.
-4. ~~Video engine meter.~~ Done 2026-10-28, commit `fe388c80`: `AMDGPUVideo`
+4. ~~Video engine meter.~~ Done 2026-10-28, commit `e4d2444b`: `AMDGPUVideo`
    (`VCN`, bar by default, `GPU_ENGINE_4` color). Live: matches sysfs idle
    (0%, 25/25 MHz), during an encode (99%, 2933/2200 MHz) and a decode (100%
    while GPU usage read 5%). Fake: `sleep`, unknown `gpu_metrics` revision →
@@ -339,7 +346,7 @@ Meters (steps 2 to 4):
    removed, captions kept. Previous htoprc saved as
    `~/.config/htop/htoprc.bak-2026-10-28`.
    Then (user's request, same day): own config file and side by side. Commit
-   `7d510f17` (`Settings: give htop-gpu its own configuration file`) and
+   `8717c760` (`Settings: give htop-gpu its own configuration file`) and
    htop-gpu `3.5.3-2` installed as `htop-gpu` next to the repo `htop`. The GPU
    layout moved to `~/.config/htop-gpu/htop-gpurc`, and stock `htoprc` went back
    to the two-column backup. Checked with `tools/test-config-path.sh` (16

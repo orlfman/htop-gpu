@@ -81,6 +81,11 @@ Run after every change, from this folder:
 - `python3 -I tools/test-sampler.py` must end with `ALL PASSED` (about 30 s).
 - After touching config handling (`Settings.c`): `tools/test-config-path.sh`
   must end with `ALL PASSED` (throwaway home folders; never the user's files).
+- After touching `tools/check-style.sh`: `tools/test-check-style.sh` must end
+  with `ALL PASSED`. `check-style.sh` exits 2 (`STYLE CHECK FAILED TO RUN`) when
+  a tool is missing or broken; that is not a pass.
+- New tests should change state under one running process where the code keeps
+  state across refreshes; restarting per case hides staleness bugs (AUDIT.md).
 
 Visual checks of meters (htop is full-screen, so run it in a terminal you can see):
 
