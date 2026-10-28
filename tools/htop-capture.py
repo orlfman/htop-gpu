@@ -2,6 +2,7 @@
 # Run htop in a 200x40 pty for a few seconds, then print each header row followed by its
 # text grouped by color, e.g. "[bold yellow]95°C". For checking meter colors, which a
 # plain terminal read cannot show. Usage: htop-capture.py <htoprc> <htop binary> [seconds]
+# An htoprc of "-" leaves HTOPRC unset, so htop finds its config file on its own.
 import os, pty, re, signal, struct, sys, time, fcntl, termios, select
 
 htoprc, binary = sys.argv[1], sys.argv[2]
@@ -12,6 +13,8 @@ pid, fd = pty.fork()
 if pid == 0:
     fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
     env = dict(os.environ, TERM="xterm-256color", HTOPRC=htoprc)
+    if htoprc == "-":
+        del env["HTOPRC"]
     os.execve(binary, [binary], env)
 
 raw = b""

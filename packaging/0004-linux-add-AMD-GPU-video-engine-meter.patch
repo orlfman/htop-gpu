@@ -1,7 +1,7 @@
 From fe388c80ee8b1f0393bbcebd202cc0d6daa9c75b Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 15:01:33 -0700
-Subject: [PATCH 4/4] linux: add AMD GPU video engine meter
+Subject: [PATCH 4/5] linux: add AMD GPU video engine meter
 
 Add AMDGPUVideo ("VCN:100% vclk:2933MHz dclk:2200MHz"), the busy
 percentage of the RX 9070 XT's video engine with its video and decoder

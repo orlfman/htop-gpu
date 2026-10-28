@@ -1,7 +1,7 @@
 From 4875c09e30cd8dfd8fe1b87d97e2378a1fe464a6 Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 14:31:49 -0700
-Subject: [PATCH 2/4] linux: add AMD GPU usage, VRAM and power meters
+Subject: [PATCH 2/5] linux: add AMD GPU usage, VRAM and power meters
 
 Add three header meters for the RX 9070 XT, fed by the AMDGPU sampler:
 AMDGPUUsage (caption "GPU") shows the GPU busy percentage, AMDGPUVRAM

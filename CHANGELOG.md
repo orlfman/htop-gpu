@@ -3,6 +3,37 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Claude Code (Claude Opus 5.5): own config, side by side with stock htop
+
+- **User's request:** htop-gpu gets its own config in an XDG folder named
+  `htop-gpu`, file `htop-gpurc`, and installs next to stock htop. The user
+  explicitly OK'd diverging from upstream for this.
+- **`src/htop` commit `7d510f17`** (`Settings: give htop-gpu its own
+  configuration file`): `~/.config/htop-gpu/htop-gpurc` (or under
+  `$XDG_CONFIG_HOME`). Without one yet it starts from stock's
+  `~/.config/htop/htoprc`, then `~/.htoprc`, and saves that as its own; stock
+  files are only read. Found while reading: upstream moves and **deletes**
+  `~/.htoprc`, which htop-gpu would have done to stock htop's file, so that
+  block is replaced. `$HTOPRC` and `/etc/htoprc` work as before. Man page
+  updated.
+- **New `tools/test-config-path.sh`:** 16 checks in throwaway homes (fresh,
+  seeded from stock, own file wins, legacy not deleted, XDG, `$HTOPRC`). All
+  pass; the unpatched build fails 7, so the test can tell. `htop-capture.py`
+  learned `-` (leave `HTOPRC` unset).
+- **Package `3.5.3-2`:** installs as `htop-gpu` (binary, man page, desktop entry
+  with Name/Icon/Exec, icons renamed), no `provides`/`conflicts`, and fails the
+  build if a file named like stock htop's is left over. 0 files shared with the
+  stock package; namcap as for stock.
+- **User's files:** current GPU layout copied to
+  `~/.config/htop-gpu/htop-gpurc`, then `~/.config/htop/htoprc` restored from
+  `htoprc.bak-2026-10-28` (two columns with the stock GPU meter), in that order,
+  so the first htop-gpu start couldn't seed from the restored file.
+- **Installed** (user typed sudo, confirmed both): `htop-gpu 3.5.3-1 → 3.5.3-2`,
+  then repo `htop 3.5.3-1.1`. Checked: `htop` = `3.5.3-1.1-arch` with two
+  columns, `htop-gpu` = `3.5.3-2-gpu` with the GPU column, neither run changed
+  its config file.
+- **Checks:** build clean, `STYLE OK`, `ALL PASSED` (sampler + config path).
+
 ## 2026-10-28, Claude Code (Claude Opus 5.5): step 5
 
 - **Packaging:** `packaging/PKGBUILD` (Arch's htop PKGBUILD as `htop-gpu`,

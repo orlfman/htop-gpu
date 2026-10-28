@@ -1,11 +1,11 @@
 # htop-gpu: plan
 
-Status (2026-10-28): steps 1–5 done. All 7 meters are committed and pushed on
-`amdgpu-meters` (`0c74a6b7` sampler, `4875c09e` GPU usage / VRAM / power,
-`f45e9ec7` temperatures and clocks, `fe388c80` video engine). htop-gpu 3.5.3-1
-is built from `packaging/` and installed, with the GPU column in the user's
-header; the packaging is committed and pushed. Next: step 6 items, only if
-wanted.
+Status (2026-10-28): steps 1–5 done. `amdgpu-meters` = `0c74a6b7` sampler,
+`4875c09e` GPU usage / VRAM / power, `f45e9ec7` temperatures and clocks,
+`fe388c80` video engine, `7d510f17` own config file; all pushed. htop-gpu
+3.5.3-2 is installed as `htop-gpu` next to the repo `htop`, each with its own
+config (`~/.config/htop-gpu/htop-gpurc` with the GPU column, `~/.config/htop/htoprc`
+two columns). Next: step 6 items, only if wanted.
 
 In progress: nobody.
 
@@ -217,6 +217,7 @@ htop-gpu/                    git repo (ignores src/, test/, makepkg output)
     build-htop-asan.sh       whole htop with ASan + UBSan (optionally on fake-sysfs)
     export-patches.sh        amdgpu-meters commits → packaging/*.patch + checksums
     check-upstream.sh        is a newer htop out than the one htop-gpu is built on?
+    test-config-path.sh      own htop-gpurc, seeding, stock files untouched (16 checks)
     gpu_metrics.py           gpu_metrics v1.3 decoder
     vcn_probe.py             runs a command, samples fdinfo + gpu_metrics
 ```
@@ -229,7 +230,19 @@ Dev loop:
 
 Package:
 
-- `pkgname=htop-gpu`, `provides=(htop)`, `conflicts=(htop)`.
+- `pkgname=htop-gpu`, installed **next to** the stock `htop` package (since
+  `3.5.3-2`): `package()` renames everything stock htop also installs
+  (`/usr/bin/htop-gpu`, `htop-gpu.1` man page, `htop-gpu.desktop` with
+  Name/Icon/Exec changed, `htop-gpu` icons) and fails if a file named like stock
+  htop's is left over. No `provides`/`conflicts`. `3.5.3-1` replaced htop
+  instead.
+- Own config: commit `7d510f17` makes htop-gpu read
+  `~/.config/htop-gpu/htop-gpurc` (`$XDG_CONFIG_HOME/htop-gpu/htop-gpurc`).
+  Without one yet it starts from stock htop's `~/.config/htop/htoprc`, then
+  `~/.htoprc`, and saves that as its own. Stock files are only read, never
+  changed: upstream's code moves and deletes `~/.htoprc`, which htop-gpu must
+  not do to stock htop's file. `$HTOPRC` still overrides. The man page says so.
+  The user explicitly OK'd this divergence from upstream (2026-10-28).
 - Same upstream git tag as Arch, plus the 4 `amdgpu-meters` commits as patch
   files. `tools/export-patches.sh` writes them with `git format-patch` and
   updates `_patches` and the checksums. The git source checksum `updpkgsums`
@@ -248,16 +261,13 @@ Package:
   `SRCDEST`, makepkg unpacks into `src/` and clones into `htop/` next to the
   PKGBUILD, and `src/` would collide with the dev clone.
 - Build with `makepkg -fC` in `packaging/`, install with
-  `sudo pacman -U packaging/htop-gpu-<ver>-x86_64.pkg.tar.zst`; pacman asks to
-  remove `htop`. Same file list as the stock package. `pacman -Q htop` then
-  answers `htop-gpu` (provides), so dependents stay satisfied.
+  `sudo pacman -U packaging/htop-gpu-<ver>-x86_64.pkg.tar.zst`. Stock htop
+  stays a normal repo package that `pacman -Syu` keeps updated.
 
-Rollback: `sudo pacman -S htop` swaps the repo build back in. Stock htop skips
-meter names it doesn't know and drops them from htoprc the next time it saves,
-so back up `htoprc` before switching.
+Removing it: `sudo pacman -R htop-gpu`; stock htop and its `htoprc` are
+unaffected, and `~/.config/htop-gpu/` can be deleted by hand.
 
-Updates: since the package name differs, `pacman -Syu` won't touch htop-gpu. It
-also won't update it. `tools/check-upstream.sh` shows the PKGBUILD's version, the
+Updates: `pacman -Syu` updates stock htop but never htop-gpu. `tools/check-upstream.sh` shows the PKGBUILD's version, the
 installed htop-gpu, the repo htop and the newest upstream tag, and says when a
 newer htop is out. When htop bumps: rebase `amdgpu-meters` (see "Staying close
 to upstream"), run the checks, update `pkgver` (reset `pkgrel=1`), run
@@ -328,6 +338,13 @@ Meters (steps 2 to 4):
    video as bars; temps, GPU clock, VRAM clock as text), the stock GPU meter
    removed, captions kept. Previous htoprc saved as
    `~/.config/htop/htoprc.bak-2026-10-28`.
+   Then (user's request, same day): own config file and side by side. Commit
+   `7d510f17` (`Settings: give htop-gpu its own configuration file`) and
+   htop-gpu `3.5.3-2` installed as `htop-gpu` next to the repo `htop`. The GPU
+   layout moved to `~/.config/htop-gpu/htop-gpurc`, and stock `htoprc` went back
+   to the two-column backup. Checked with `tools/test-config-path.sh` (16
+   checks; the unpatched build fails 7 of them, including deleting
+   `~/.htoprc`).
 6. Later, if wanted: video engine process list, GTT in the VRAM meter, fan RPM,
    other cards.
 

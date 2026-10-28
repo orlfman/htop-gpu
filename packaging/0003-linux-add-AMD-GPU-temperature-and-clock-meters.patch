@@ -1,7 +1,7 @@
 From f45e9ec71f349b7cde201f3344bf319da19e70be Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 14:44:35 -0700
-Subject: [PATCH 3/4] linux: add AMD GPU temperature and clock meters
+Subject: [PATCH 3/5] linux: add AMD GPU temperature and clock meters
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

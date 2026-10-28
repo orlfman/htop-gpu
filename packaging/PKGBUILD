@@ -2,11 +2,13 @@
 # Based on Arch Linux's htop PKGBUILD by Christian Hesse, T.J. Townsend and contributors.
 # The patches are the amdgpu-meters commits of https://github.com/orlfman/htop,
 # exported with tools/export-patches.sh (which also updates _patches and the checksums).
+# Everything is installed under the htop-gpu name and it reads ~/.config/htop-gpu/htop-gpurc,
+# so it sits next to the stock htop package instead of replacing it.
 
 pkgname=htop-gpu
 pkgver=3.5.3
-pkgrel=1
-pkgdesc='Interactive process viewer, with AMD RX 9070 XT GPU meters'
+pkgrel=2
+pkgdesc='Interactive process viewer with AMD RX 9070 XT GPU meters, alongside stock htop'
 arch=('x86_64')
 url='https://github.com/orlfman/htop'
 license=('GPL-2.0-or-later')
@@ -15,8 +17,6 @@ makedepends=('git' 'lm_sensors')
 optdepends=('lm_sensors: show cpu temperatures'
             'lsof: show files opened by a process'
             'strace: attach to a running process')
-provides=("htop=${pkgver}")
-conflicts=('htop')
 options=('!emptydirs')
 validpgpkeys=('F7ABE8761E6FE68638E6283AFE0842EE36DD8C0C'  # Nathan Scott <nathans@debian.org>
               '0D316B6ABE022C7798D0324BF1D35CB9E8E12EAD') # Benny Baumann <BenBE@geshi.org>
@@ -25,14 +25,16 @@ _patches=(
   0002-linux-add-AMD-GPU-usage-VRAM-and-power-meters.patch
   0003-linux-add-AMD-GPU-temperature-and-clock-meters.patch
   0004-linux-add-AMD-GPU-video-engine-meter.patch
+  0005-Settings-give-htop-gpu-its-own-configuration-file.patch
 )
 source=("git+https://github.com/htop-dev/htop.git#tag=${pkgver}"
         "${_patches[@]}")
 sha256sums=('a4619a140f8374c526d27cf5f892b2dceaee27b33a0446d902c35962a5159850'
-            '242f41e50daff4f4600808575048d0d93d1ff7815678e68a6cd578d11aeca773'
-            '485d6846154f5fa5bbb2bff1d4bbaa35bf1825459ce71af124d22aa96d637920'
-            'bbcc67e661999d7d1ac38ae8ee9c4b06157a9584ac88c1f45672df79ea1dd963'
-            'ed4e16bfba7d0c1198d77fb318b77c55bdfbdb39d9ae97db384fdd700700edb4')
+            '9c30bd8412706ffa134a8c418b91f1fbf0a205cd00b9c936d83db678cbf5539c'
+            'fc06dd373df517c5abdab16318c4c1e3a6ee9911498b804bba900d1fce7ddfd1'
+            '5e28ca8ee9ae328200fab70570f0a68b9fadce3081a46960d30bf38ffe90acda'
+            '644779c3733f25bbce3203440c881b1c83196a30603dcd72348de2f4a83323f2'
+            '4f90767bb10e448a694283e55eb61b385f68ef05828272ae7bf9a204575f375b')
 
 prepare() {
   cd htop
@@ -72,4 +74,25 @@ package() {
   cd htop
 
   make DESTDIR="${pkgdir}" install
+
+  # rename everything stock htop also installs, so both packages fit side by side
+  cd "${pkgdir}/usr"
+  mv bin/htop bin/htop-gpu
+  mv share/man/man1/htop.1 share/man/man1/htop-gpu.1
+  mv share/applications/htop.desktop share/applications/htop-gpu.desktop
+  mv share/icons/hicolor/scalable/apps/htop.svg share/icons/hicolor/scalable/apps/htop-gpu.svg
+  mv share/pixmaps/htop.png share/pixmaps/htop-gpu.png
+  sed -i \
+    -e 's/^Name=Htop$/Name=htop-gpu/' \
+    -e 's/^Icon=htop$/Icon=htop-gpu/' \
+    -e 's/^Exec=htop$/Exec=htop-gpu/' \
+    share/applications/htop-gpu.desktop
+
+  # fail loudly if a new htop release installs a file this list doesn't know yet
+  local _left
+  _left=$(find . -name 'htop*' ! -name 'htop-gpu*')
+  if [[ -n ${_left} ]]; then
+    error "files still named like stock htop's: ${_left}"
+    return 1
+  fi
 }

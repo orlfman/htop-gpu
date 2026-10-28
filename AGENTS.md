@@ -62,12 +62,15 @@ Only one agent works on the project at a time.
   change it.
 - Ask the user before installing packages, changing system configuration, or
   installing the built htop.
-- Don't touch `~/.config/htop/htoprc` unless the user asks. htop rewrites its
-  config file on exit, so test runs use `HTOPRC=<this folder>/test/<config>`
-  (`test/` is ignored). When the user does ask: back the file up first and make
-  sure no htop is running while editing it.
-- htop-gpu is the user's installed htop. Rebuilding or reinstalling it, or
-  going back to the repo htop, needs the user's OK.
+- Don't touch the user's config files unless the user asks:
+  `~/.config/htop-gpu/htop-gpurc` (htop-gpu, with the GPU column) and
+  `~/.config/htop/htoprc` (stock htop). htop rewrites its config file on exit,
+  so test runs use `HTOPRC=<this folder>/test/<config>` (`test/` is ignored).
+  When the user does ask: back the file up first and make sure no htop is
+  running while editing it.
+- Installed: `htop-gpu` (`/usr/bin/htop-gpu`, this project) next to the repo
+  `htop` (`/usr/bin/htop`). Rebuilding or reinstalling htop-gpu, or changing the
+  stock package, needs the user's OK.
 
 ## Checks
 
@@ -76,6 +79,8 @@ Run after every change, from this folder:
 - Build: `make -C src/htop -j"$(nproc)"`. No new warnings.
 - `tools/check-style.sh` must end with `STYLE OK` (IWYU + astyle on htop-gpu's files).
 - `python3 -I tools/test-sampler.py` must end with `ALL PASSED` (about 30 s).
+- After touching config handling (`Settings.c`): `tools/test-config-path.sh`
+  must end with `ALL PASSED` (throwaway home folders; never the user's files).
 
 Visual checks of meters (htop is full-screen, so run it in a terminal you can see):
 
@@ -87,7 +92,8 @@ Visual checks of meters (htop is full-screen, so run it in a terminal you can se
   `test/htop-fake` the same way. Rebuilding only the tree needs no new binary.
 - Colors: a plain terminal read shows no colors, so use
   `python3 -I tools/htop-capture.py test/<config> <htop binary> [seconds]`, which
-  prints each header row with its text grouped by color.
+  prints each header row with its text grouped by color. An htoprc of `-` leaves
+  `HTOPRC` unset, so htop finds its config file itself.
 - Sanitizers, after changing meter or sampler code: `tools/build-htop-asan.sh
   test/htop-asan [test/fake-sysfs]` builds the whole htop with ASan + UBSan
   (and rebuilds the normal one). Run it through `htop-capture.py` with

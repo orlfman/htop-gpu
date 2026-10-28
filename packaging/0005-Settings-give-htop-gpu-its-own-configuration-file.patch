@@ -1,0 +1,122 @@
+From 7d510f173e9194e6b8a170b2f6e5db72e781d078 Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 15:29:29 -0700
+Subject: [PATCH 5/5] Settings: give htop-gpu its own configuration file
+
+Read and write the configuration from ~/.config/htop-gpu/htop-gpurc (or
+$XDG_CONFIG_HOME/htop-gpu/htop-gpurc) instead of stock htop's htoprc,
+so htop-gpu can be installed next to stock htop: stock htop does not
+know the AMDGPU meters and would drop them the next time it saves.
+
+Without its own file yet, htop-gpu starts from stock htop's
+configuration (~/.config/htop/htoprc, then ~/.htoprc) and saves that as
+htop-gpurc. Stock htop's files are only read, never changed; in
+particular ~/.htoprc is no longer moved and deleted, since it belongs to
+stock htop. $HTOPRC and the system-wide fallback work as before. The man
+page describes the new location.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Settings.c | 32 ++++++++++++++++++++------------
+ htop.1.in  | 16 +++++++++++++---
+ 2 files changed, 33 insertions(+), 15 deletions(-)
+
+diff --git a/Settings.c b/Settings.c
+index 44204244..13a05e57 100644
+--- a/Settings.c
++++ b/Settings.c
+@@ -958,6 +958,7 @@ Settings* Settings_new(const Machine* host, Hashtable* dynamicMeters, Hashtable*
+    this->screens = xCalloc(Platform_numberOfDefaultScreens, sizeof(ScreenSettings*));
+    this->nScreens = 0;
+ 
++   char* stockRcfile = NULL;
+    char* legacyDotfile = NULL;
+    const char* rcfile = getenv("HTOPRC");
+    if (rcfile) {
+@@ -972,13 +973,15 @@ Settings* Settings_new(const Machine* host, Hashtable* dynamicMeters, Hashtable*
+       char* configDir = NULL;
+       char* htopDir = NULL;
+       if (xdgConfigHome && xdgConfigHome[0] == '/') {
+-         this->initialFilename = String_cat(xdgConfigHome, "/htop/htoprc");
++         this->initialFilename = String_cat(xdgConfigHome, "/htop-gpu/htop-gpurc");
+          configDir = xStrdup(xdgConfigHome);
+-         htopDir = String_cat(xdgConfigHome, "/htop");
++         htopDir = String_cat(xdgConfigHome, "/htop-gpu");
++         stockRcfile = String_cat(xdgConfigHome, "/htop/htoprc");
+       } else {
+-         this->initialFilename = String_cat(home, CONFIGDIR "/htop/htoprc");
++         this->initialFilename = String_cat(home, CONFIGDIR "/htop-gpu/htop-gpurc");
+          configDir = String_cat(home, CONFIGDIR);
+-         htopDir = String_cat(home, CONFIGDIR "/htop");
++         htopDir = String_cat(home, CONFIGDIR "/htop-gpu");
++         stockRcfile = String_cat(home, CONFIGDIR "/htop/htoprc");
+       }
+       (void) mkdir(configDir, 0700);
+       (void) mkdir(htopDir, 0700);
+@@ -1000,14 +1003,18 @@ Settings* Settings_new(const Machine* host, Hashtable* dynamicMeters, Hashtable*
+    this->delay = DEFAULT_DELAY;
+ 
+    bool ok = Settings_read(this, this->filename, host, /*checkWritability*/true);
+-   if (!ok && legacyDotfile) {
+-      ok = Settings_read(this, legacyDotfile, host, this->writeConfig);
+-      if (ok && this->writeConfig) {
+-         // Transition to new location and delete old configuration file
+-         if (Settings_write(this, false) == 0) {
+-            unlink(legacyDotfile);
+-         }
+-      }
++
++   /* htop-gpu keeps its own configuration, so it can be installed next to stock htop.
++      Without one yet, start from stock htop's configuration and save that as ours.
++      Stock htop's files are left untouched, since stock htop may still use them. */
++   const char* const stockFiles[] = { stockRcfile, legacyDotfile };
++   for (size_t i = 0; !ok && i < ARRAYSIZE(stockFiles); i++) {
++      if (!stockFiles[i])
++         continue;
++
++      ok = Settings_read(this, stockFiles[i], host, this->writeConfig);
++      if (ok && this->writeConfig)
++         Settings_write(this, false);
+    }
+    if (!ok) {
+       this->screenTabs = true;
+@@ -1025,6 +1032,7 @@ Settings* Settings_new(const Machine* host, Hashtable* dynamicMeters, Hashtable*
+ 
+    this->lastUpdate = 1;
+ 
++   free(stockRcfile);
+    free(legacyDotfile);
+ 
+    return this;
+diff --git a/htop.1.in b/htop.1.in
+index 22c58706..c3e4bc2e 100644
+--- a/htop.1.in
++++ b/htop.1.in
+@@ -726,14 +726,24 @@ and
+ .B libnl-genl-3-200
+ via dynamic loading.
+ .SH "CONFIG FILES"
+-By default
++By default this htop-gpu build of
+ .B htop
+ reads its configuration from the XDG-compliant path
+-.IR ~/.config/htop/htoprc .
++.IR ~/.config/htop-gpu/htop-gpurc ,
++separate from stock htop's
++.IR ~/.config/htop/htoprc ,
++so both can be installed side by side.
+ The configuration file is overwritten upon clean exit by
+ .BR htop 's
+ in-program Setup configuration, so it should not be hand-edited.
+-If no user configuration exists
++If no htop-gpu configuration exists yet,
++.B htop
++starts from stock htop's
++.I ~/.config/htop/htoprc
++(or
++.IR ~/.htoprc )
++and saves that as its own, leaving stock htop's files untouched.
++If there is no user configuration at all,
+ .B htop
+ tries to read the system-wide configuration from
+ .I @sysconfdir@/htoprc
