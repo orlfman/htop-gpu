@@ -3,6 +3,19 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, user + Claude Code (Claude Opus 5.5): game-load check
+
+- The user ran `htop-gpu` 3.5.3-3 next to Dune: Awakening with MangoHud; the
+  screenshots are in `docs/game-load-test/`. All meters agree with MangoHud:
+  GPU 100% vs 99%, VRAM 7.19G vs 7.2 GiB, temps 56/73/68 °C exactly equal, GPU
+  clock 2964 vs 2957 MHz, VRAM clock 1258 MHz both, VCN 0% (not recording).
+  Power 282 W vs 302 W, most likely the two tools reading at different moments.
+- Still not seen live: GPU clock above the 3000 MHz bar seed (peak was 2964;
+  the clock meter is text in the user's layout anyway) and the yellow/red
+  temperature colors (junction 73 °C, threshold 90). Both are covered by the
+  fake-card tests.
+- This closes the "not covered by either agent" item from Codex's re-test.
+
 ## 2026-10-28, Codex: independent re-test of the audit fixes
 
 - Recorded in `AUDIT.md` ("Independent re-test by Codex"; status line updated),
