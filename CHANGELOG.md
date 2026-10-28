@@ -3,6 +3,29 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Claude Code (Claude Opus 5.5): step 4
+
+- **Meter:** `AMDGPUVideo` (`VCN:100% vclk:2933MHz dclk:2200MHz`) in
+  `linux/AMDGPUMeter.c`, bar by default like GPU usage, `GPU_ENGINE_4` color
+  (bold blue). One busy % for encode and decode, since RDNA 4 shares one queue.
+  Registered with one more line in `linux/Platform.c`. All 7 meters now exist.
+- **Live checks** (`htop-capture.py`): idle 0% / 25 / 25 MHz, encode 99% /
+  2933 / 2200 MHz, decode 100% / 2933 / 2200 MHz with GPU usage at 5% (the load
+  lands on the right meter); all equal to sysfs at the same moment. Graph and LED
+  render.
+- **Fake checks:** suspended → `sleep`; `gpu_metrics` revision 1.4 → busy shown,
+  `vclk:N/A dclk:N/A`; missing `vcn_busy_percent` → `N/A`.
+- **Sanitizers:** new `tools/build-htop-asan.sh`. Whole htop under ASan + UBSan,
+  all 7 meters, all 4 modes: 30 s live under encode load, then fake suspended,
+  hot, broken (4 missing files, garbage, truncated `gpu_metrics`) and unbound
+  trees. Zero reports; positive control confirmed logging works. Normal binary
+  rebuilt afterwards (no sanitizer symbols, no fake path).
+- **Checks:** build clean, `STYLE OK`, `ALL PASSED`.
+- **Committed and pushed** (user's OK): `src/htop` commit `fe388c80` (`linux: add
+  AMD GPU video engine meter`) and the doc/tool changes here.
+- **Next:** step 5, PKGBUILD in `packaging/`, install (ask first), header
+  layout. Captions and the layout are still open questions (PLAN.md).
+
 ## 2026-10-28, Claude Code (Claude Opus 5.5): step 3
 
 - **Meters:** `AMDGPUTemp` (`GPU temp: edge:41°C junction:43°C mem:42°C`),

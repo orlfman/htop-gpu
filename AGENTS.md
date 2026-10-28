@@ -84,6 +84,12 @@ Visual checks of meters (htop is full-screen, so run it in a terminal you can se
 - Colors: a plain terminal read shows no colors, so use
   `python3 -I tools/htop-capture.py test/<config> <htop binary> [seconds]`, which
   prints each header row with its text grouped by color.
+- Sanitizers, after changing meter or sampler code: `tools/build-htop-asan.sh
+  test/htop-asan [test/fake-sysfs]` builds the whole htop with ASan + UBSan
+  (and rebuilds the normal one). Run it through `htop-capture.py` with
+  `ASAN_OPTIONS=log_path=<dir>/asan:detect_leaks=0` and
+  `UBSAN_OPTIONS=log_path=<dir>/ubsan:print_stacktrace=1`; no files in `<dir>`
+  means no findings.
 
 First-time setup when `src/htop/Makefile` is missing:
 
