@@ -38,6 +38,9 @@ All 18 stateful fake groups/three negative controls passed; the old source fails
 ten new assertions. Full sanitized meter transitions and package checks passed.
 No new GPU load tests; real PM/reference comparison limits remain. See AUDIT.md.
 
+Planned next: [AMD meters for any AMD GPU](PLAN-AMD-AGNOSTIC.md) (investigated
+2026-10-29, not started).
+
 In progress: nobody.
 
 GitHub (both private): https://github.com/orlfman/htop-gpu (this folder) and

@@ -4,6 +4,16 @@ Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
 
+## 2026-10-29, Claude Code (Claude Opus 5.5): AMD-agnostic investigation and plan
+
+- At the user's request, investigated making the AMD meters work on any amdgpu
+  GPU; wrote `PLAN-AMD-AGNOSTIC.md`. No code changed.
+- Computed all 16 `gpu_metrics` layouts' field offsets by compiling the Linux
+  v7.3 structs: v1.0-1.3 keep vclk/dclk at 60/62, APUs v2.x at 84/86 (v2.0 88/90).
+  Checked hwmon/sysfs availability per GPU type in the kernel source and docs.
+- Open design points recorded: absent vs failed sensors, VRAM speed without
+  opening DRM nodes, card selection via the existing `Name(n)` param, APU GTT.
+
 ## 2026-10-29, Claude Code (Claude Opus 5.5): README and repo descriptions
 
 - Added `README.md` for the GitHub page, written in plain first person at the
