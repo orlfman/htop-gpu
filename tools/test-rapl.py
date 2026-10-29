@@ -3,7 +3,7 @@
 
 1. fake powercap trees, changed under ONE running sampler: power from energy deltas, counter
    wrap-around, cache, several packages, subzones and intel-rapl-mmio ignored, no access,
-   counters appearing / disappearing, a long term limit that appears later
+   counters appearing / disappearing, long term limits changing / failing / recovering
 2. live: the real /sys at idle, then with every CPU busy
 
 Needs src/htop configured (./configure). Run: python3 -I test-rapl.py
@@ -168,6 +168,47 @@ def main():
             (100, no_limit, is_("active", None, None), "limit missing"),
             (1100, lambda r: (energy(pk(r), 11000000), os.rename(f"{r}/limit.hidden", f"{pk(r)}/constraint_0_power_limit_uw")),
              is_("active", 10.0, 250), "limit read again: 250 W"),
+        ])
+
+        def power_and_limit(r, uj, limit_uw):
+            energy(pk(r), uj)
+            path = f"{pk(r)}/constraint_0_power_limit_uw"
+            if limit_uw is None:
+                os.unlink(path)
+            else:
+                write(path, f"{limit_uw}\n")
+
+        scenario("long term limit changes, fails, and recovers without restarting", fake, root, [
+            (100, one_package, is_("active", None, 250, 1), "initial limit: 250 W"),
+            (1100, lambda r: energy(pk(r), 62000000), is_("active", 61.0, 250), "61 W against 250 W"),
+            (1100, lambda r: power_and_limit(r, 123000000, 65000000),
+             is_("active", 61.0, 250), "same timestamp caches energy and limit"),
+            (900, None, is_("active", 61.0, 250), "older timestamp caches energy and limit"),
+            (2100, None, is_("active", 61.0, 65), "newer timestamp reads changed 65 W limit"),
+            (3100, lambda r: power_and_limit(r, 184000000, None),
+             is_("active", 61.0, None), "removed limit becomes unavailable, watts stay valid"),
+            (3100, lambda r: power_and_limit(r, 245000000, 125000000),
+             is_("active", 61.0, None), "same timestamp keeps unavailable limit cached"),
+            (4100, None, is_("active", 61.0, 125), "limit restored: 125 W"),
+            (5100, lambda r: power_and_limit(r, 306000000, "junk"),
+             is_("active", 61.0, None), "malformed limit becomes unavailable"),
+            (6100, lambda r: power_and_limit(r, 367000000, 65000000),
+             is_("active", 61.0, 65), "valid limit recovers after malformed value"),
+            (7100, lambda r: (energy(pk(r), 428000000), os.chmod(f"{pk(r)}/constraint_0_power_limit_uw", 0)),
+             is_("active", 61.0, None), "unreadable limit becomes unavailable"),
+            (8100, lambda r: (os.chmod(f"{pk(r)}/constraint_0_power_limit_uw", 0o644), power_and_limit(r, 489000000, 250000000)),
+             is_("active", 61.0, 250), "readable limit recovers: 250 W"),
+        ])
+
+        def no_range(r):
+            one_package(r)
+            energy(pk(r), RANGE - 1000000)
+            os.unlink(f"{pk(r)}/max_energy_range_uj")
+
+        scenario("counter range missing at start, restored before wrap", fake, root, [
+            (100, no_range, is_("active", None, 250), "first sample without a counter range"),
+            (1100, lambda r: (write(f"{pk(r)}/max_energy_range_uj", f"{RANGE}\n"), energy(pk(r), 2000000)),
+             is_("active", 3.0, 250), "range retried: wrapped delta is 3 W"),
         ])
 
         scenario("garbage counter", fake, root, [

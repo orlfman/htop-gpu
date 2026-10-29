@@ -2,14 +2,15 @@
 
 Status (2026-10-28): steps 1–5 done. `amdgpu-meters` = `6813391d` sampler,
 `7171bb46` GPU usage / VRAM / power, `0b54b642` temperatures and clocks,
-`4870d3a8` video engine, `762add8d` own config file, `631bc883` fan meter, `363370bd` Intel CPU power; all
-pushed. htop-gpu 3.5.3-6 is installed as `htop-gpu` next to the repo `htop`, each with its own
+`4870d3a8` video engine, `762add8d` own config file, `631bc883` fan meter, `363370bd` Intel CPU power, `6c06d243` PL1 refresh; all
+pushed. htop-gpu 3.5.3-7 is installed as `htop-gpu` next to the repo `htop`, each with its own
 config (`~/.config/htop-gpu/htop-gpurc` with the GPU column, `~/.config/htop/htoprc`
 two columns). All five audit findings are fixed; findings 1-4 were
 independently re-tested, and Codex validated the finding 5 idle-clock test
 fix with zero-clock and invalid-reading regressions. See AUDIT.md.
-No package update was needed for that test-only fix. Next: optional
-step 6 items.
+Intel PL1 staleness (finding 6) is fixed in `6c06d243` and installed in
+3.5.3-7; finding 7 (P3, later CPU packages) is deferred at the user's
+request. Next: optional step 6 items.
 
 In progress: nobody.
 

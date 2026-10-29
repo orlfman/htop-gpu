@@ -3,6 +3,67 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Claude Code (Claude Opus 5.5): finding 6 reviewed, committed, installed
+
+- Reviewed Codex's PL1 fix and tests; agreed. Re-ran: build clean, `STYLE OK`,
+  `test-rapl.py` `ALL PASSED`; the old code fails 7 of the new checks.
+- Committed as `6c06d243` on top (crediting Codex); folding it into `363370bd`
+  would need a force-push that wasn't requested, so history is unchanged.
+- Package 3.5.3-7 (8 patches), installed. Codex's audit docs committed with it.
+
+## 2026-10-28, Codex: fixed audit finding 6 (mutable Intel PL1)
+
+- User authorized the P2 fix and deferred additional CPU-package discovery
+  (finding 7). Only `src/htop/linux/IntelRAPL.c` changed in production source.
+- Read the long-term power limit each newer sampler tick; removed the
+  permanent `limitsRead` cache. Static energy-counter ranges remain cached
+  after a successful read, with retries while unavailable. Same/older ticks
+  still share the complete cached sample.
+- Added stateful regressions to `tools/test-rapl.py` for changing, missing,
+  malformed, unreadable, and restored limits; checks preserve correct watts
+  and timestamp caching. Added missing-range recovery before a counter wrap.
+  Before the production fix, seven new limit assertions failed as expected.
+- After the fix: CPU and GPU sampler suites `ALL PASSED`; `STYLE OK`;
+  full normal and ASan/UBSan builds in a disposable copy passed with zero
+  warnings. Live CPU pre-load/load readings were 12.4/127.4 W.
+- Independent production-meter callbacks now show `61.0W/65W` and
+  `:61.0W limit:65W` after a 250 -> 65 W change, use N/A on failed limit
+  reads, and recover correctly. All four display modes ran on the fresh
+  sanitized full build without reports. Syntax/diff checks passed.
+- Updated AUDIT.md with the fix, red/green evidence, testing limits, and
+  deferred P3 status; PLAN.md is back to nobody in progress.
+  Uncommitted: outer AUDIT.md, PLAN.md, CHANGELOG.md, tools/test-rapl.py;
+  nested linux/IntelRAPL.c. Prior audit documentation was preserved.
+- Existing binaries, user configs, sysfs settings, and packaging are unchanged.
+  Installed 3.5.3-6 and patch 0007 still contain the previous code; commit and
+  re-export are needed before a future package includes the fix.
+  No install, commit, or push. Next: package/release steps only if requested.
+
+## 2026-10-28, Codex: independent Intel CPU power audit
+
+- Audited outer `4c631711`, htop `363370bd`, installed `htop-gpu 3.5.3-6`.
+  Read the shared/upstream instructions and current plan/changelog first;
+  both repositories were initially clean.
+- Added AUDIT.md finding 6 (P2): a changed PL1 limit stays cached until
+  rediscovery/restart. A live production-meter probe over fake counters
+  retained `61.0W/250W` and `limit:250W` after PL1 changed to 65 W.
+- Added finding 7 (P3): a second package appearing while the first is readable
+  is never discovered; demonstrated 10 W/250 W instead of the combined
+  30 W/375 W. This multi-package edge case does not affect the current
+  single-package machine. Neither implementation issue was fixed.
+- CPU and GPU sampler suites, config suite, and style regression suite all
+  `ALL PASSED`; `STYLE OK`. CPU pre-load/load readings were 21.7/128.1 W.
+  Independent live watts matched raw energy deltas; production meter
+  permission/parse/range recovery checks passed under ASan/UBSan.
+- Full normal and ASan/UBSan builds passed with zero warnings in a disposable
+  copy. All four CPU display modes ran without sanitizer reports; seven
+  patch checksums/exact source reproduction and installed integrity passed.
+- Pre-report hashes: 402 files checked, only the deliberate PLAN.md marker
+  differed. Uncommitted: AUDIT.md, PLAN.md, CHANGELOG.md. Source, existing
+  binaries, and both user configs unchanged; no install, commit, or push.
+- Full reproduction details and testing limits are in AUDIT.md; in progress
+  nobody. Next: fix findings 6-7 only if requested.
+
 ## 2026-10-28, Claude Code (Claude Opus 5.5): Intel CPU power meter
 
 - **User's request:** CPU power, Intel only for now; the user's udev rule

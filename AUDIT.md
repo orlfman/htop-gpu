@@ -2,8 +2,8 @@
 
 Date: 2026-10-28 (America/Phoenix).
 Auditor: Codex.
-Status: all five findings are fixed; findings 1-4 were independently re-tested by Codex, and the finding 5 test fix was applied and validated by Codex.
-All findings are P2 (normal priority).
+Status: findings 1-6 are resolved and validated; finding 6 is committed (`6c06d243`) and installed in `htop-gpu 3.5.3-7`. Finding 7 (P3) is deferred at the user's request.
+P2 means normal priority; P3 means low priority.
 
 ## Scope and baseline
 
@@ -510,3 +510,260 @@ Uncommitted files: `tools/test-sampler.py`, `AUDIT.md`, `PLAN.md`, and `CHANGELO
 The preceding audit and trace documentation was preserved.
 No package rebuild, reinstall, power-setting change, commit, or push was performed.
 No new findings were identified by this scoped fix validation.
+
+
+## Intel CPU power audit — 2026-10-28
+
+Auditor: Codex.
+Original audit status: two new findings, 6 (P2) and 7 (P3), with no fixes applied during that audit.
+Finding 6 is subsequently fixed and validated below; finding 7 is deferred at the user's request.
+Findings 1-5 remain resolved.
+
+### Scope and baseline
+
+Reviewed the new Intel RAPL sampler, CPU meter, Linux registration, test driver,
+test suite, packaging patch, and current project documentation.
+Read `AGENTS.md`, `PLAN.md`, `CHANGELOG.md`, `src/htop/AGENTS.md`, and
+`src/htop/docs/styleguide.md` before testing.
+Both repositories were clean and the plan listed nobody in progress.
+
+- Outer repository: `4c631711c6835a79b890853def36292bf949564e`.
+- htop source repository: `363370bdb3e87ca966224dfb08a3b5a56eaf29f8`, based on upstream `3.5.3`.
+- Installed: `htop-gpu 3.5.3-6`, alongside `htop 3.5.3-1.1`.
+- Live hardware: one readable package, `/sys/class/powercap/intel-rapl:0`, named `package-0`.
+- Line references below refer to this htop source revision.
+
+### 6. [P2] CPU power limit stays stale after PL1 changes
+
+Locations: `src/htop/linux/IntelRAPL.c:127-155` and `166-167`.
+Display impact: `src/htop/linux/IntelRAPLMeter.c:37-39` and `50-55`.
+
+The sampler treats the long-term power limit as immutable.
+Once `IntelRAPL_readLimits()` succeeds, `limitsRead` remains true and the
+sampler stops reading `constraint_N_power_limit_uw` until the zones are forgotten.
+However, Linux documents `constraint_X_power_limit_uw` as a writable setting,
+so a legitimate power-limit change during an htop session leaves the displayed
+limit and bar/graph scaling based on the old setting.
+See the [Linux powercap constraint documentation](https://cdn.kernel.org/doc/html/latest/power/powercap/powercap.html#constraints).
+
+Reproduced with the unchanged production sampler under one process and a
+temporary fake sysfs tree; no real CPU settings were changed:
+
+| Timestamp (ms) | Package energy (uJ) | PL1 file (uW) | Actual sampler result | Expected limit |
+| --- | --- | --- | --- | --- |
+| 100 | 1,000,000 | 250,000,000 | first sample, limit 250 W | 250 W |
+| 1100 | 62,000,000 | 250,000,000 | 61 W, limit 250 W | 250 W |
+| 2100 | 123,000,000 | 65,000,000 | 61 W, limit **250 W** | **65 W** |
+
+An independent probe compiled the production sampler and meter together and
+called the actual meter update/display callbacks through the same sequence.
+The final bar text stayed `61.0W/250W`, its total stayed 250, and the text display
+stayed `:61.0W limit:250W` after the limit file became 65 W.
+The measured wattage was correct; the denominator, displayed limit, and chart
+normalization were stale.
+Both probes exited cleanly under ASan/UBSan.
+
+Suggested correction: refresh the mutable PL1 value on newer sampler ticks,
+while retaining shared same/older-timestamp caching and any appropriate cache
+for genuinely static counter metadata.
+Add a regression that changes a valid limit to another valid limit in one
+running process, checks the new sample and actual meter text/total, and verifies
+that a repeated timestamp still returns the cached result.
+Also cover a limit becoming unavailable and recovering so stale values do not
+silently survive a failed refresh.
+The existing test only covers a limit missing initially and appearing later;
+it does not change a limit after its first successful read.
+
+### 7. [P3] Partial discovery prevents later CPU packages from being counted
+
+Location: `src/htop/linux/IntelRAPL.c:158-164`.
+Related enumeration: `src/htop/linux/IntelRAPL.c:95-125`.
+
+Discovery runs only while `zoneCount` is zero.
+If one package is discovered successfully, another package appearing later is
+never added while the first package remains readable.
+This affects multi-package systems with delayed package-zone registration or
+package hotplug, and does not affect the currently observed single-package host.
+
+Reproduced using the unchanged production sampler and temporary fake sysfs,
+keeping one process alive throughout:
+
+1. At 100 ms, create only `intel-rapl:0`, named `package-0`, with energy
+   1,000,000 uJ and PL1 250,000,000 uW; sample reports one package.
+2. At 1100 ms, set package 0 energy to 11,000,000 uJ; sample reports 10 W/250 W.
+3. Before 2100 ms, create `intel-rapl:1`, named `package-1`, with energy
+   1,000,000 uJ and PL1 125,000,000 uW; advance package 0 to 21,000,000 uJ.
+   The sample still reports only one package.
+4. At 3100 ms, set package 0 energy to 31,000,000 uJ and package 1 energy to
+   21,000,000 uJ. A sampler that discovered and baselined the new package at
+   2100 ms would now report **two packages, 30 W, limit 375 W**.
+   Actual result remains **one package, 10 W, limit 250 W**.
+
+The process exited cleanly under ASan/UBSan.
+Suggested correction: periodically reconcile the discovered package set,
+preserving previous energy values for unchanged packages and baselining newly
+found ones before calculating their power.
+Add a same-process one-package -> two-package test, followed by another
+refresh to check the combined energy delta and power limits.
+The existing two-package test starts with both present, and the appearance
+test starts with no packages; neither exercises partial discovery.
+
+### Validation completed
+
+- `python3 -I tools/test-rapl.py`: `ALL PASSED`, exit 0.
+  Existing delta, wrap, same/older tick cache, multi-package sum, unreadable
+  counter recovery, discovery/reappearance, delayed limit, and garbage cases
+  passed with ASan/UBSan.
+  Live pre-load power was 21.722 W and busy power was 128.059 W.
+  Other audit suites ran concurrently, so the pre-load reading is a
+  plausibility check rather than a controlled idle benchmark.
+- Independent live comparison: bracketed each sampler read with raw
+  `energy_uj` reads and calculated delta bounds using the supplied timestamps.
+  Reported power fell inside both bounds: 12.265 <= 12.283 <= 12.393 W,
+  then 9.854 <= 9.870 <= 9.888 W.
+  Clean ASan/UBSan exit.
+- Independent production-meter checks passed for permission denied -> readable
+  -> valid watts, malformed energy -> rediscovery/baseline -> valid watts, and
+  a missing counter range restored during the same process.
+  Expected `no access`, `N/A`, and restored watt text were verified through
+  the actual update/display callbacks; ASan/UBSan clean.
+- `python3 -I tools/test-sampler.py`: `ALL PASSED`, exit 0.
+  Includes the earlier zero-clock regression, discovery/metadata recovery,
+  fake fault/cache/suspend cases, live plausibility, and live VA-API encode.
+  An actual live GPU sample had sclk 0 MHz and passed the corrected validator.
+  Video busy peaked at 100%, vclk/dclk at 2933/2200 MHz; ASan/UBSan clean.
+- `tools/test-config-path.sh`: `ALL PASSED`, exit 0, using disposable homes.
+- `tools/test-check-style.sh`: all seven cases passed, exit 0.
+- `tools/check-style.sh`: `STYLE OK`, exit 0, including the new production RAPL files.
+- Full normal build and full ASan/UBSan build in a disposable copy: both
+  passed with zero warnings. Existing development/installed binaries were
+  not rebuilt or replaced.
+- A fresh sanitized full htop ran the CPU meter in bar, text, graph, and LED
+  modes simultaneously with a disposable config. Captured real watts and
+  the 250 W limit; no sanitizer log files or error output were produced.
+  This was a terminal capture smoke test, not an interactive F2 setup test
+  or an independent pixel-by-pixel verification of graph/LED rendering.
+- All seven package patch SHA-256 checks passed. Applying all seven to the
+  local upstream `3.5.3` archive exactly reproduced all 364 tracked htop files.
+- `pacman -Qkk htop-gpu htop`: exit 0, both packages have 16 files and zero
+  altered files.
+- Python syntax parsing and `git diff --check` passed.
+
+### Preservation, limits, and handoff
+
+Before the report update, fingerprints of 402 tracked/protected files were
+checked; only the deliberate PLAN.md in-progress marker differed.
+The protected set included both repositories' tracked files, existing normal
+and sanitizer htop binaries, installed htop/htop-gpu binaries, and both user configs.
+No real sysfs settings, udev rules, packages, or user configs were changed.
+Only AUDIT.md, PLAN.md, and CHANGELOG.md were modified for this audit.
+No install, commit, or push was performed; the plan is back to nobody in progress.
+
+Real hardware testing covered the current readable single Intel package and
+the RX 9070 XT; permission faults, counter wrap, recovery, limit changes, and
+additional packages were simulated in temporary trees.
+No physical package hotplug, actual PL1 write, suspend/resume cycle, or
+comparison against external electrical power measurement was performed.
+The packaged patches were verified, but no new package was built or installed.
+The existing suites pass because they do not cover the two runtime transitions
+above. Permanent regression tests and implementation fixes remain to be done
+if requested.
+
+
+## Resolution of finding 6 — mutable Intel PL1
+
+Date: 2026-10-28 (America/Phoenix).
+Fixed by Codex at the user's request.
+Status: resolved and validated in local source; uncommitted, not installed.
+Finding 7 remains deferred at the user's explicit request; its discovery logic
+was not changed.
+
+### Change and version
+
+Baseline: outer `4c631711c6835a79b890853def36292bf949564e`, htop
+`363370bdb3e87ca966224dfb08a3b5a56eaf29f8`, plus the local changes described here.
+The preceding audit documentation was already uncommitted and was preserved.
+
+`src/htop/linux/IntelRAPL.c` no longer caches the long-term power limit forever.
+`IntelRAPL_readLimits()` now runs on each newer sampler tick and rereads PL1
+for each already discovered package.
+It clears the previous limit before reading, so a missing, unreadable, or
+unparsable limit becomes unavailable instead of silently retaining the old value.
+The static energy-counter range is cached once read successfully, and retried
+while unavailable.
+The shared same/older-timestamp cache, energy-delta calculation, wrap handling,
+permission status, and package discovery behavior remain intact.
+
+No meter code change was necessary: its existing update/display callbacks use
+the refreshed sample limit for text and chart total, and show N/A while the
+limit is unavailable.
+
+### Regression coverage and validation
+
+- Added a single-process scenario to `tools/test-rapl.py` that changes a valid
+  PL1 from 250 to 65 W, removes and restores it as 125 W, supplies malformed
+  data, denies read permission, and restores a valid readable limit.
+  Throughout, the energy steps independently imply 61 W.
+  The scenario checks fresh limits on newer ticks and cached limits on
+  same/older ticks, including an unavailable limit restored during a cached tick.
+- Added a counter-range recovery case: start with the range missing and the
+  energy near wrap; restore the range on the next tick and verify a 3 W
+  wrapped delta. This guards the separate static-range retry behavior.
+- **Before the fix:** the updated CPU suite exited 1 with seven new limit
+  assertions failing because the sample kept its old 250 W limit.
+  The existing tests and new range-recovery test passed; ASan/UBSan clean.
+- **After the fix:** `python3 -I tools/test-rapl.py` exited 0, `ALL PASSED`,
+  including both new scenarios and all previous tests under ASan/UBSan.
+  Live pre-load power was 12.397 W and busy power 127.431 W; these are
+  plausibility checks, not controlled power benchmarks.
+- An independent temporary probe compiled the production sampler and meter
+  together under ASan/UBSan and called the actual update/display callbacks
+  through the changing-limit sequence without restarting.
+  The changed limit produced bar text `61.0W/65W`, text `:61.0W limit:65W`,
+  and chart total 65. Restoring 125 W updated all three accordingly.
+  Missing, malformed, and unreadable limits produced `N/A`/`:N/A`, and valid
+  reads recovered. Same/older ticks preserved the cached display.
+  All checks passed with a clean sanitizer exit.
+- `python3 -I tools/test-sampler.py`: exit 0, `ALL PASSED`, including existing
+  fault/recovery/cache coverage, live idle sampling, and VA-API encode.
+  Video busy peaked at 100%, vclk/dclk at 2933/2200 MHz; ASan/UBSan clean.
+- `tools/check-style.sh`: exit 0, `STYLE OK`.
+- Full normal build and full ASan/UBSan build in a disposable copy of the
+  current configured source: both passed, zero warnings.
+- The fresh sanitized full htop ran the CPU meter in bar, text, graph, and
+  LED modes together with a disposable config. Captured 15.8 W/250 W;
+  no sanitizer files or error output were produced.
+  This was a terminal capture smoke test rather than an interactive F2 test
+  or a pixel-level verification of graph/LED output.
+- Python syntax parsing and `git diff --check` passed.
+
+### Preservation and handoff
+
+Before the report update, fingerprints of 402 files were checked.
+Only the intended `linux/IntelRAPL.c`, `tools/test-rapl.py`, and PLAN.md work
+marker differed from this fix session's baseline.
+The baseline included the prior uncommitted audit/handoff docs.
+Existing development/sanitizer binaries, installed binaries, both user configs,
+and all packaging files remained unchanged.
+Limit changes, read faults, and range recovery were simulated in temporary
+sysfs trees; no real CPU limits or udev rules were changed.
+
+Uncommitted files: outer `AUDIT.md`, `PLAN.md`, `CHANGELOG.md`, and
+`tools/test-rapl.py`; nested `linux/IntelRAPL.c`.
+No install, commit, or push was performed.
+Installed `htop-gpu 3.5.3-6` and packaging patch 0007 still have the previous
+code: the source fix must be committed and exported before a future package
+contains it. No package rebuild was performed.
+Finding 7 was intentionally not addressed, and no new findings were identified
+by this scoped fix validation.
+
+
+## Finding 6: review, commit and install
+
+Date: 2026-10-28. Claude Code (Claude Opus 5.5), at the user's request ("review, commit, push, and install if it's all good").
+
+- Reviewed Codex's change to `linux/IntelRAPL.c` and the new `tools/test-rapl.py` scenarios: the limit is read on every newer tick, cleared before each read so a failed read cannot keep an old value, the static counter range is cached once read, and the shared per-tick cache is unchanged. Agreed with the fix.
+- Re-ran independently: build clean, `STYLE OK`, `test-rapl.py` `ALL PASSED` (live 9.2 W idle, 126.3 W busy); against the previous `IntelRAPL.c`, the suite fails 7 of the new limit checks, so they catch the stale limit.
+- Committed as a new commit on `amdgpu-meters`, `6c06d243` (`linux: read the Intel CPU power limit on every refresh`), crediting Codex. Folding it into `363370bd` would have needed a force-push, which was not part of this request, so history was left as is.
+- Packaged as `htop-gpu 3.5.3-7` (8 patches), namcap as stock, config-path checks pass on the packaged binary; installed.
+- Finding 7 stays deferred.
