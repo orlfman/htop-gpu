@@ -1,6 +1,7 @@
 # htop-gpu: AMD meters for any AMD GPU (plan)
 
 Status (2026-10-29): investigation done, nothing implemented. Written by Claude Code.
+First part, RDNA 2 and newer dedicated cards: [PLAN-AMD-DGPU.md](PLAN-AMD-DGPU.md).
 Goal: the AMD meters work on any GPU driven by `amdgpu`, not only the RX 9070 XT,
 without opening DRM device nodes and without waking a sleeping GPU.
 

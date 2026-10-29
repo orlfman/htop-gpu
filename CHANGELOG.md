@@ -4,6 +4,16 @@ Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
 
+## 2026-10-29, Claude Code (Claude Opus 5.5): plan for RDNA 2+ dedicated cards
+
+- At the user's request, narrowed the AMD plan to RDNA 2/3/4 dGPUs and wrote
+  `PLAN-AMD-DGPU.md`. No code changed.
+- Checked in the Linux v7.3 SMU drivers that RX 6000/7000/9000 all report
+  `gpu_metrics` v1.3, so no new layouts are needed; RDNA 2 lacks
+  `vcn_busy_percent` (fall back to `average_mm_activity`).
+- Cards are told apart by the GC version in `ip_discovery` sysfs (here 12.0.1),
+  with an exact dGPU list taken from the kernel's APU flag logic.
+
 ## 2026-10-29, Claude Code (Claude Opus 5.5): AMD-agnostic investigation and plan
 
 - At the user's request, investigated making the AMD meters work on any amdgpu
