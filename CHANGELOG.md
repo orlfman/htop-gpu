@@ -3,6 +3,34 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Codex: CPU caption Pwr, package 3.5.3-8 installed
+
+- Re-read the shared docs, upstream instructions/style guide, and current
+  audit/release handoff. Both repositories were clean; Claude had already
+  committed and installed finding 6's PL1 fix in 3.5.3-7.
+- User authorized the caption change, commit, push, and installation.
+  Source commit `61c598b1` (`linux: label Intel CPU power meter Pwr`) changes
+  only the caption from CPU to Pwr. `IntelCPUPower` and the GPU meter's
+  separate identity are unchanged; saved layouts need no edits.
+- Source branch pushed. Exported nine patches and bumped pkgrel to 8;
+  all checksums pass and the patches reproduce all 364 tracked source files.
+  Earlier patch changes are the generated series count (8 -> 9).
+- Build and full ASan/UBSan build/normal restore: zero warnings.
+  `STYLE OK`; CPU and GPU sampler suites `ALL PASSED` (live CPU
+  10.4/127.7 W pre-load/busy; video 100%, clocks 2933/2200 MHz).
+  CPU/GPU power meters coexist as Pwr in all four modes, sanitizer clean.
+- `makepkg -fC --noconfirm` built 3.5.3-8 without compiler warnings.
+  Packaged captions and all 33 config-path checks passed. No stock file
+  conflicts; namcap matches stock's known diagnostics apart from its old
+  license warning.
+- Installed 3.5.3-8 through system authentication. Verified version, exact
+  installed binary match, both Pwr bars using a copy of the real layout,
+  and `pacman -Qkk` (16 files, zero altered for each package).
+  Stock htop and both user configs retain their baseline hashes.
+- AUDIT.md records validation and limits; finding 7 stays deferred.
+  This release commit includes the package metadata/patches and handoff docs.
+  In progress nobody; no remaining implementation work for the rename.
+
 ## 2026-10-28, Claude Code (Claude Opus 5.5): finding 6 reviewed, committed, installed
 
 - Reviewed Codex's PL1 fix and tests; agreed. Re-ran: build clean, `STYLE OK`,

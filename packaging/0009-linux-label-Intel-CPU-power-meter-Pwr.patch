@@ -1,0 +1,26 @@
+From 61c598b1a128e06864a4f071347d6ed63ce71282 Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 18:32:52 -0700
+Subject: [PATCH 9/9] linux: label Intel CPU power meter Pwr
+
+Use Pwr for the CPU package power caption, as requested, alongside
+the GPU power meter in its own column. Keep IntelCPUPower as the meter
+name so existing layouts continue to select the same meter.
+
+Co-Authored-By: OpenAI Codex (GPT-6) <noreply@openai.com>
+---
+ linux/IntelRAPLMeter.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/linux/IntelRAPLMeter.c b/linux/IntelRAPLMeter.c
+index 089d9154..3365d9db 100644
+--- a/linux/IntelRAPLMeter.c
++++ b/linux/IntelRAPLMeter.c
+@@ -70,6 +70,6 @@ const MeterClass IntelCPUPowerMeter_class = {
+    .attributes = IntelCPUPowerMeter_attributes,
+    .name = "IntelCPUPower",
+    .uiName = "Intel CPU power",
+-   .caption = "CPU",
++   .caption = "Pwr",
+    .description = "Intel CPU package power (RAPL) / long term power limit"
+ };

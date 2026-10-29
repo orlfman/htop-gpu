@@ -2,14 +2,15 @@
 
 Status (2026-10-28): steps 1–5 done. `amdgpu-meters` = `6813391d` sampler,
 `7171bb46` GPU usage / VRAM / power, `0b54b642` temperatures and clocks,
-`4870d3a8` video engine, `762add8d` own config file, `631bc883` fan meter, `363370bd` Intel CPU power, `6c06d243` PL1 refresh; all
-pushed. htop-gpu 3.5.3-7 is installed as `htop-gpu` next to the repo `htop`, each with its own
+`4870d3a8` video engine, `762add8d` own config file, `631bc883` fan meter,
+`363370bd` Intel CPU power, `6c06d243` PL1 refresh, `61c598b1` CPU Pwr caption;
+all pushed. htop-gpu 3.5.3-8 is installed as `htop-gpu` next to the repo `htop`, each with its own
 config (`~/.config/htop-gpu/htop-gpurc` with the GPU column, `~/.config/htop/htoprc`
 two columns). All five audit findings are fixed; findings 1-4 were
 independently re-tested, and Codex validated the finding 5 idle-clock test
 fix with zero-clock and invalid-reading regressions. See AUDIT.md.
-Intel PL1 staleness (finding 6) is fixed in `6c06d243` and installed in
-3.5.3-7; finding 7 (P3, later CPU packages) is deferred at the user's
+Intel PL1 staleness (finding 6) is fixed in `6c06d243`, first installed in
+3.5.3-7 and retained in 3.5.3-8; finding 7 (P3, later CPU packages) is deferred at the user's
 request. Next: optional step 6 items.
 
 In progress: nobody.
@@ -78,7 +79,7 @@ Samsung GDDR6. Kernel 7.3.0-4-cachyos.
 | 6 | VRAM clock | `AMDGPUMemClock` | `VRAM clock: ` | hwmon `freq2_input` (mclk) + `mem_busy_percent` | `VRAM clock: 1258MHz 20.1Gbps busy:12%` | vs top level (1258 MHz), bar text `1258MHz 20.1Gbps` |
 | 7 | Video engine | `AMDGPUVideo` | `VCN` | `vcn_busy_percent` + `gpu_metrics` vclk/dclk | `VCN:100% vclk:2933MHz dclk:2200MHz` | 0–100%, bar text `100%` |
 | 8 | Fan | `AMDGPUFan` | `Fan` | hwmon `fan1_input` / `fan1_max` | `Fan:1193RPM max:3200RPM`, `Fan:0RPM (stopped)` | vs max, bar text `1193RPM` / `stopped` |
-| 9 | CPU power (Intel) | `IntelCPUPower` | `CPU` | powercap `intel-rapl:N` package `energy_uj` deltas / long term limit | `CPU:61.3W limit:250W` | vs PL1, bar text `61.3W/250W`; `no access` if root-only |
+| 9 | CPU power (Intel) | `IntelCPUPower` | `Pwr` | powercap `intel-rapl:N` package `energy_uj` deltas / long term limit | `Pwr:61.3W limit:250W` | vs PL1, bar text `61.3W/250W`; `no access` if root-only |
 
 Each one is a separate meter, so it can be placed, moved and switched between
 bar / text / graph / LED in F2 Setup like any built-in meter. Captions and names
@@ -384,3 +385,5 @@ Both GitHub repos are private for now. Before making them public:
 
 None right now. Settled 2026-10-28: captions stay as in the meters table; the
 header is a third column for the GPU (see step 5).
+CPU package power uses `Pwr` in the CPU column, as requested by the user;
+the separate GPU power meter also uses `Pwr` in the GPU column.

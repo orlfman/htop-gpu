@@ -2,7 +2,7 @@
 
 Date: 2026-10-28 (America/Phoenix).
 Auditor: Codex.
-Status: findings 1-6 are resolved and validated; finding 6 is committed (`6c06d243`) and installed in `htop-gpu 3.5.3-7`. Finding 7 (P3) is deferred at the user's request.
+Status: findings 1-6 are resolved and validated; finding 6 is committed (`6c06d243`) and retained in installed `htop-gpu 3.5.3-8`, which labels CPU power Pwr. Finding 7 (P3) is deferred at the user's request.
 P2 means normal priority; P3 means low priority.
 
 ## Scope and baseline
@@ -767,3 +767,73 @@ Date: 2026-10-28. Claude Code (Claude Opus 5.5), at the user's request ("review,
 - Committed as a new commit on `amdgpu-meters`, `6c06d243` (`linux: read the Intel CPU power limit on every refresh`), crediting Codex. Folding it into `363370bd` would have needed a force-push, which was not part of this request, so history was left as is.
 - Packaged as `htop-gpu 3.5.3-7` (8 patches), namcap as stock, config-path checks pass on the packaged binary; installed.
 - Finding 7 stays deferred.
+
+
+## CPU caption Pwr: release validation
+
+Date: 2026-10-28 (America/Phoenix). Codex.
+Scope: the user authorized renaming the CPU power caption from CPU to Pwr,
+committing, pushing, packaging, and installing the result.
+No new findings; finding 7 remains deferred at the user's request.
+
+### Baseline and change
+
+- Outer baseline: `d6b2a3d7d47e45b4e5452db6d49063114153c6b5`.
+- Source baseline: `6c06d243`; installed package before release: 3.5.3-7.
+- Both repositories were clean and PLAN.md listed nobody working.
+- Re-read shared docs and upstream coding instructions/style guide, including
+  Claude's finding 6 commit/install handoff.
+- Source revision: `61c598b1a128e06864a4f071347d6ed63ce71282`,
+  `linux: label Intel CPU power meter Pwr`, committed and pushed to
+  `origin/amdgpu-meters` without rewriting history.
+- The sole source change is `.caption = "Pwr"` in `linux/IntelRAPLMeter.c`.
+  Internal name `IntelCPUPower` and the separate `AMDGPUPower` meter remain
+  unchanged; no configuration migration is necessary.
+
+### Validation
+
+- Normal build: passed, zero warnings.
+- `tools/check-style.sh`: exit 0, `STYLE OK`.
+- `python3 -I tools/test-rapl.py`: exit 0, `ALL PASSED`, including the
+  stateful changing-limit/failure/recovery regression from finding 6.
+  Live CPU pre-load/busy values were 10.363/127.654 W; ASan/UBSan clean.
+- `python3 -I tools/test-sampler.py`: exit 0, `ALL PASSED`.
+  Live VA-API encode reached 100% video busy and 2933/2200 MHz video clocks;
+  ASan/UBSan clean.
+- `tools/build-htop-asan.sh` completed its full sanitized build and normal
+  restore with zero warnings. A temporary four-column config placed CPU
+  and GPU power together in bar, text, graph, and LED modes.
+  Both rendered Pwr captions; CPU text used `limit:` and GPU text used `cap:`.
+  No sanitizer reports or error output; both internal names survived config save.
+- Exported all nine patches with `tools/export-patches.sh`; each SHA-256
+  check passed. Applying the series to upstream tag 3.5.3 exactly reproduced
+  all 364 tracked htop files. The first eight patches only changed their
+  generated series numbering from /8 to /9.
+- `makepkg -fC --noconfirm`: built `htop-gpu 3.5.3-8`, zero compiler warnings.
+  Extracted package reports `htop 3.5.3-8-gpu` and shows separate CPU/GPU Pwr
+  captions with valid watt readings.
+- `tools/test-config-path.sh <extracted package binary>`: exit 0,
+  all 33 checks passed using disposable homes.
+- No packaged file paths overlap stock htop's files.
+  Namcap matches the stock baseline: missing hicolor-icon-theme dependency,
+  implicitly satisfied glibc, and possibly unneeded libnl. Stock additionally
+  reports its existing GPL license-format issue; the custom package does not.
+
+### Installation and preservation
+
+Installed `packaging/htop-gpu-3.5.3-8-x86_64.pkg.tar.zst` through the system's
+authentication dialog after noninteractive sudo required a password.
+The package manager completed the upgrade from 3.5.3-7 to 3.5.3-8 successfully.
+
+- Installed version: `htop 3.5.3-8-gpu`.
+- Installed binary SHA-256 matches the binary extracted from the built package.
+- `pacman -Qkk htop-gpu htop`: both have 16 total files and zero altered files.
+- Ran the installed binary with a disposable copy of the user's actual layout;
+  both CPU and GPU Pwr bars appeared (12.3 W/250 W and 37 W/304 W in that capture).
+- Stock htop remains 3.5.3-1.1. All seven protected stock-file/user-config
+  hashes match the pre-release baseline; the real configs were not edited.
+
+This was a caption/package validation, with terminal capture smoke tests rather
+than interactive F2 or pixel-level graph/LED testing.
+No new hardware support or package-discovery changes were introduced.
+PLAN.md and CHANGELOG.md record the release, and in progress is back to nobody.
