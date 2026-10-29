@@ -1,7 +1,13 @@
 # Intel iGPU: secondary implementation plan
 
 Created: 2026-10-28. Updated: 2026-10-29 (America/Phoenix). Author: Codex.
-Status: investigation complete; implementation has not started.
+Status: baseline implemented, tested, and installed as htop-gpu 3.5.3-12.
+Committed 2026-10-29 after Claude Code's review: source `bb4f7331`, tests/docs/packaging in the outer repo.
+Finding 8 (P2) is fixed and validated in 3.5.3-12: lost access to a known Intel
+client reports unavailable instead of false zero. See AUDIT.md.
+Revised plan committed and pushed first as outer `b145c766` at the user's request.
+The user's third column now places the Intel block beneath the eight AMD meters;
+the original config was backed up. See the release record below.
 This supplements PLAN.md and follows AGENTS.md.
 The user wants Intel iGPU stats below the RX 9070 XT stats in the existing third column.
 The user selected Mission Center's utilization, clock speed, memory usage, and video encode/decode as the initial baseline, and requested a plan update before implementation.
@@ -57,7 +63,8 @@ Readable `/proc/<pid>/fdinfo/<fd>` entries contain:
 An inventory found ten distinct readable Intel clients after deduplicating PCI address/client ID.
 Some process fdinfo directories cannot be inspected by this user; this is not proof those processes use the GPU.
 Therefore the result is activity attributable to visible clients, with possible omissions from other or short-lived clients.
-The header must communicate that scope, for example `Intel iGPU: visible apps`.
+Meter descriptions communicate that scope. At the user's request, the normal
+heading is just `Intel iGPU`; sleep and access/error indications remain visible.
 
 The [DRM usage-statistics specification](https://docs.kernel.org/gpu/drm-usage-stats.html) defines client identity, engine capacities, counter behavior, and memory categories.
 The [i915 implementation](https://raw.githubusercontent.com/torvalds/linux/v7.3/drivers/gpu/drm/i915/i915_drm_client.c) confirms accounting per engine class.
@@ -76,12 +83,15 @@ The latter cannot express both domains clearly.
 | `rps_RP0_freq_mhz` | 2000 MHz | 1400 MHz | Hardware maximum exposed here |
 
 GT1 reaching 500 MHz during the pinned video workload supports its media-domain identification on this host.
-Render load and a positive GT0 clock still need a dedicated validation workload.
+The implementation's pinned Vulkan workload subsequently verified render activity
+and a 2000 MHz requested GT0 clock; see the implementation record below.
 Retain per-device GT mapping explicitly; do not generalize these IDs to every Intel GPU.
 Zero actual frequency is a reported value, even when the device runtime state is active.
 Missing/unreadable values are unavailable, not zero.
 Mission Center's pinned Intel backend uses the card-wide requested `gt_cur_freq_mhz` value.
-For baseline parity, use the equivalent GT0 requested value and identify it as requested in the description/text.
+For baseline parity, use the equivalent GT0 requested value and identify it as
+requested in the meter description. The compact header omits that qualifier
+at the user's request; this does not change the underlying clock source.
 Do not silently switch between requested and actual readings when a source is unavailable.
 Configured limits may change; reread mutable limits on newer ticks, preserving the PL1 audit lesson.
 The [i915 GT sysfs implementation](https://raw.githubusercontent.com/torvalds/linux/v7.3/drivers/gpu/drm/i915/gt/intel_gt_sysfs_pm.c) separates actual and requested frequency reads.
@@ -147,7 +157,8 @@ Do not calculate used bytes as zero from that result.
 A separate same-scan snapshot found nine unique readable Intel clients with 218,872 KiB allocated in system memory, also 218,872 KiB resident in that snapshot, and 24,584 KiB marked shared.
 The shared count is a category within the allocation, not an extra amount to add on top.
 This is evidence for a useful initial memory readout, not proof of unique physical bytes across all clients.
-The default text can be `iGPU mem: ~214MiB allocated`; keep the visibility explanation in the block's heading/description.
+The default text is `iGPU mem: 214M`; keep the approximate allocated-memory and
+visibility explanation in the meter descriptions.
 The system-region budget may be shown later only if explicitly labeled as shared capacity, never dedicated VRAM.
 An optional query must open only while the device is already active and close promptly; the text-first baseline need not query every tick or add a libdrm runtime dependency.
 
@@ -184,22 +195,22 @@ GPU temp
 GPU clock
 VRAM clock
                           Blank
-Intel iGPU: visible apps  new text heading
+Intel iGPU                new text heading
 iGP [utilization]
-iGPU clock: ...MHz requested
-iGPU mem: ~...MiB allocated
+iGPU clock: ...MHz
+iGPU mem: ...M
 Vid [video encode/decode]
 ```
 
 | Internal name proposed | Caption | Default mode | Source |
 | --- | --- | --- | --- |
-| `IntelGPUInfo` | `Intel iGPU: ` | Text | Device identity, visibility/backend status |
+| `IntelGPUInfo` | `Intel iGPU` | Text | Device heading, sleep/access/error status |
 | `IntelGPUUsage` | `iGP` | Bar | visible-client render/compute graphics-work estimate |
 | `IntelGPUClock` | `iGPU clock: ` | Text | Requested GT0 clock, matching the reference source |
 | `IntelGPUMemory` | `iGPU mem: ` | Text | approximate visible-client allocated system bytes |
 | `IntelGPUVideo` | `Vid` | Bar | combined encode/decode video activity |
 
-These are proposed names for implementation, not names supported by the installed binary yet.
+These names are supported by both the development and installed 3.5.3-12 binaries.
 Keep class counters separate internally and use an explicit summary rule for the single utilization bar.
 For the selected reference-style graphics-work proxy, sum valid render/compute contributions and saturate the displayed index at 100%; do not add video/copy/enhancement to that total.
 Retain unsaturated values and coverage state so valid overlap is distinguishable from corrupt counters.
@@ -207,7 +218,8 @@ Clock charts use the requested render clock against its current configured maxim
 Memory remains useful in text/absolute-byte forms when a trustworthy bar denominator is unavailable; a missing total must not hide valid allocated bytes.
 The text heading is informational; utilization and video meters need all four normal display modes.
 Placement changes happen only after implementation passes, with a backup and no htop-gpu process running while its real config is edited.
-No layout/config change was made during this planning request.
+A disposable copy at `test/intel-igpu-preview.rc` now demonstrates this layout;
+the user's saved layout now uses the same Intel placement after the authorized release.
 
 ## Sampler design
 
@@ -285,6 +297,125 @@ Separate engine bars and actual/media-clock details are deferred until after the
 Initial GT mapping is host-specific; xe and other Intel PCI IDs are future work.
 Additional CPU-package discovery from AUDIT.md finding 7 remains deferred and is unrelated to this plan.
 
-This investigation did not modify production source, binaries, packages, permissions, drivers, or user configs.
-The October 28 workload was the brief pinned Intel encode; the October 29 refinement used only source inspection, client-counter reads, and an informational memory query.
-No htop implementation or installation was performed.
+The initial investigation and plan refinement did not modify production code or
+installation. The subsequent implementation is recorded below.
+
+## Implementation record: 2026-10-29
+
+Added `linux/IntelGPU.{c,h}` and `linux/IntelGPUMeter.{c,h}` in the nested htop
+repo, based on `61c598b1`. Existing source changes are registration lines only
+in `Makefile.am` and `linux/Platform.c`. No new runtime dependency is required.
+
+- Discover i915 `8086:7d67` and its DRM device numbers dynamically, select the
+  lowest supported PCI address, and invalidate histories on card removal/rebind.
+  Filter fdinfo by device node, driver, and PCI identity before counting it.
+- Deduplicate 64-bit client IDs across descriptors/processes; retain independent
+  render/compute/video histories and counter high-water marks. New/missing/
+  inaccessible data rebaseline instead of becoming lifetime spikes or false zero.
+  Cache all readings once per newer htop tick and expire vanished client records.
+- Preserve raw rates and video capacity; utilization is capped render+compute,
+  while the shared E/D index caps raw video engine-equivalents at 100%, without
+  dividing by two. Capacity controls plausibility checks, not this display's scale.
+  Actual i915 timing exceeded wall time by about 9% in one valid busy interval;
+  allow a bounded 25% accounting mismatch while rejecting gross counter jumps.
+- Read requested GT0 clock and mutable maximum afresh; preserve zero and show
+  unavailable for bad/missing readings. Check runtime status first; suspended
+  samples skip dynamic clock/proc reads and clear histories before wake.
+- Sum checked allocated `drm-total-system0` bytes once per readable client;
+  never add resident/shared categories. Memory text/LED use approximate absolute
+  units. No bar/percentage is offered without a meaningful global denominator.
+  Heading text communicates visible-app scope and known partial/no-access states.
+- Utilization, video, and clock support bar/text/graph/LED; the heading is text.
+  The preview retains all eight AMD rows, then adds spacer/heading/four stats,
+  giving fourteen rows in the third column.
+
+Validation passed: normal build without warnings; IWYU/astyle; ten stateful
+fake scenarios and three deliberate fault controls; Intel VA-API encode/decode
+(peak E/D 32.7%/18.7%); Intel Vulkan graphics (usage 100%, requested 2000 MHz);
+existing AMD/CPU/config/style-tool suites; whole-program ASan/UBSan meter
+transitions across available modes. The final capacity-metadata correction was
+retested with fake scenarios/negative controls and the sanitized display.
+Full details and the two problems fixed during development are in AUDIT.md.
+
+Remaining acceptance limits: no side-by-side Mission Center UI comparison;
+external activity prevented an isolated real idle/autosuspend measurement.
+Fake suspend/wake and source inspection passed, but do not prove real idle PM
+conservation. A short uncontrolled CPU-cost comparison suggests about 1.7 extra
+percentage points of one CPU core with the Intel block; repeat under controlled
+conditions before treating that as a performance benchmark.
+Dedicated copy/enhancement or isolated compute workloads were not tested.
+
+The user started a game during final implementation review, so no further GPU
+load tests were run after that point. At that handoff there were no driver,
+settings, permission, or installation changes. The release followed separately.
+
+## Release record: 2026-10-29
+
+The user authorized installation and editing htop-gpu's config to put Intel under
+AMD. Built and installed 3.5.3-9 with ten patches and zero compiler warnings.
+The first nine patches are unchanged; patch 0010 captures the six-file source
+working-tree diff (new sampler/meters and registration). A separate temporary
+Git index included the new files without staging or committing the real repo.
+All ten patches exactly reproduce all 368 source files from upstream 3.5.3.
+Commit the Intel implementation before using `tools/export-patches.sh` again;
+its commit-based export would otherwise omit the uncommitted Intel patch.
+
+The package binary passed all 33 config-path checks and a copied-layout capture.
+Fake Intel tests with negative controls and style passed again. Package diagnostics
+match the stock baseline, and no package file overlaps stock htop. Installation
+completed through desktop authentication; the installed binary matches the package
+and both htop packages report zero altered files.
+
+With no htop process running, backed up the config to
+`~/.config/htop-gpu/htop-gpurc.bak-2026-10-29_14-47-46` and atomically changed only
+third-column meter names/modes. Existing AMD rows and other settings are preserved.
+An installed-binary capture using a disposable copy verified heading/utilization/
+clock/memory/video below AMD. Stock htop/config and existing production source
+were preserved. No new GPU load or permission/driver setting changes.
+AUDIT.md records the release checks; remaining idle-PM/reference comparisons and
+the source/tool/doc/packaging commits remain open. In progress nobody.
+
+## Readout refinement: 2026-10-29
+
+At the user's request, removed `requested` from the clock readout and `~` /
+`allocated` from memory. Examples: `iGPU clock: 800MHz`, `iGPU mem: 4.00M`.
+Only two display format strings changed; clock/memory sources, values, units,
+validity, modes, descriptions, and the user's saved layout are unchanged.
+Installed as 3.5.3-10 after style, fake Intel tests/negative controls, complete
+sanitized-program display, package/source reproduction, and package/installed
+display checks. The cached full sanitized build was updated with the changed
+meter; no new live GPU workload or full unrelated regression suite was run.
+Audit/release details are in AUDIT.md. Patch 0010/checksums updated without a
+commit or push; prior uncommitted implementation remains. In progress nobody.
+
+## Heading refinement: 2026-10-29
+
+At the user's request, the normal heading is just `Intel iGPU`, without a colon,
+`visible apps`, or partial-coverage suffix. Sleeping still shows `Intel iGPU: sleep`;
+no-access/unavailable indications remain. Coverage details stay in the meter
+descriptions. The sampler, metric values, and real config/layout are unchanged.
+Five transitions in one full sanitized htop process (active, sleep, wake, access
+denied, recovered) verified correct text and clearing of old suffixes.
+Installed as 3.5.3-11 after normal/sanitized build, style, fake Intel tests/negative
+controls, patch/source reproduction, and package/installed display checks.
+AUDIT.md records validation/limits. Source/docs/patch 0010/PKGBUILD remain
+uncommitted; no commit/push. In progress nobody.
+
+## Finding 8 fix: 2026-10-29
+
+Installed 3.5.3-12 after fixing access loss in `IntelGPU.c`. Keep separate
+PID/starttime/FD-to-client references across process-directory/node-stat denial
+and whole-proc access gaps. A missing previously identified client makes rates
+and empty memory unavailable, rather than publishing false zero. A globally
+readable shared alias still supplies the client once. Confirmed FD close, process
+exit, and PID-generation changes expire obsolete ownership; unrelated protected
+processes/FDs do not invalidate known readings. Device changes clear both maps.
+
+Extended tests create stable process-starttime fixtures with spaced/parenthesized
+comm names. All 18 stateful groups and three negative controls passed under
+ASan/UBSan; old source fails ten new assertions. Six actual meter transitions
+in one full sanitized htop process passed, including repeated directory denial,
+FD-stat denial, and recovery. Passive real-host sampling and package/installed
+checks passed without adding GPU workloads. Existing compact labels/layout and
+both real configs are unchanged. AUDIT.md records details and remaining limits.
+Source/test/docs/patch 0010/PKGBUILD remain uncommitted; no push. In progress nobody.

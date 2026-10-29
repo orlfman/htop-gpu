@@ -1,7 +1,7 @@
 From 631bc883a5c1aad90cd4a31c9d16ecb5447609ec Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 16:53:25 -0700
-Subject: [PATCH 6/9] linux: add AMD GPU fan meter
+Subject: [PATCH 06/10] linux: add AMD GPU fan meter
 
 Add AMDGPUFan ("Fan:1193RPM max:3200RPM"), the RX 9070 XT's fan speed
 from hwmon fan1_input against fan1_max, as a bar by default. The card

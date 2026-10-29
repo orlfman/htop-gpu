@@ -1,0 +1,1117 @@
+From bb4f73317f0731df0699f7cecface2501c35645d Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 16:25:06 -0700
+Subject: [PATCH 10/10] linux: add Intel iGPU meters
+
+Add meters for the Arrow Lake iGPU (i915, 8086:7d67): a heading
+("Intel iGPU", with sleep and access states), render + compute
+utilization, the requested GT0 clock, approximate allocated system
+memory, and combined video encode/decode. Activity and memory come from
+the DRM fdinfo of readable processes, so they cover visible clients
+only; the meter descriptions say so.
+
+The device is found from sysfs metadata only, without opening a DRM
+node. Clients are counted once even when shared between processes or
+file descriptors, per-client engine deltas need a baseline, and PID,
+start time and fd ownership survives access gaps so lost access shows
+as unavailable rather than as zero (AUDIT.md finding 8). Suspended,
+rebound and unreadable devices are handled, memory units are checked,
+and the clock limit is read on every refresh.
+
+INTELGPU_SYSFS_ROOT and INTELGPU_PROC_ROOT allow pointing the sampler
+at fake trees for testing.
+
+Written by Codex; reviewed by Claude Code.
+
+Co-Authored-By: OpenAI Codex (GPT-6) <noreply@openai.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Makefile.am           |   4 +
+ linux/IntelGPU.c      | 743 ++++++++++++++++++++++++++++++++++++++++++
+ linux/IntelGPU.h      |  46 +++
+ linux/IntelGPUMeter.c | 199 +++++++++++
+ linux/IntelGPUMeter.h |  19 ++
+ linux/Platform.c      |   6 +
+ 6 files changed, 1017 insertions(+)
+ create mode 100644 linux/IntelGPU.c
+ create mode 100644 linux/IntelGPU.h
+ create mode 100644 linux/IntelGPUMeter.c
+ create mode 100644 linux/IntelGPUMeter.h
+
+diff --git a/Makefile.am b/Makefile.am
+index cbc659ea..4402fa66 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -196,6 +196,8 @@ linux_platform_headers = \
+ 	linux/HugePageMeter.h \
+ 	linux/IOPriority.h \
+ 	linux/IOPriorityPanel.h \
++	linux/IntelGPU.h \
++	linux/IntelGPUMeter.h \
+ 	linux/IntelRAPL.h \
+ 	linux/IntelRAPLMeter.h \
+ 	linux/LibSensors.h \
+@@ -228,6 +230,8 @@ linux_platform_sources = \
+ 	linux/GPU.c \
+ 	linux/HugePageMeter.c \
+ 	linux/IOPriorityPanel.c \
++	linux/IntelGPU.c \
++	linux/IntelGPUMeter.c \
+ 	linux/IntelRAPL.c \
+ 	linux/IntelRAPLMeter.c \
+ 	linux/LibSensors.c \
+diff --git a/linux/IntelGPU.c b/linux/IntelGPU.c
+new file mode 100644
+index 00000000..4b1d3258
+--- /dev/null
++++ b/linux/IntelGPU.c
+@@ -0,0 +1,743 @@
++/*
++htop - linux/IntelGPU.c
++(C) 2026 orlfman
++Released under the GNU GPLv2+, see the COPYING file
++in the source distribution for its full text.
++*/
++
++#include "config.h" // IWYU pragma: keep
++
++#include "linux/IntelGPU.h"
++
++#include <ctype.h>
++#include <dirent.h>
++#include <errno.h>
++#include <math.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/sysmacros.h>
++#include <sys/types.h>
++
++#include "Macros.h"
++#include "XUtils.h"
++#include "linux/Compat.h"
++
++
++#ifndef INTELGPU_SYSFS_ROOT
++#define INTELGPU_SYSFS_ROOT "/sys"
++#endif
++#ifndef INTELGPU_PROC_ROOT
++#define INTELGPU_PROC_ROOT "/proc"
++#endif
++
++#define INTELGPU_BUCKETS 257
++#define INTELGPU_ENGINE_COUNT 3
++#define INTELGPU_ALL_ENGINES 7
++#define INTELGPU_MAX_NODES 8
++#define INTELGPU_ACCOUNTING_SLACK 1.25
++
++enum IntelGPUEngine_ {
++   INTELGPU_RENDER,
++   INTELGPU_COMPUTE,
++   INTELGPU_VIDEO,
++};
++
++typedef struct IntelGPUDevice_ {
++   char pci[16];
++   char dir[1024];
++   char card[1024];
++   dev_t fsDevice;
++   ino_t inode;
++   dev_t nodes[INTELGPU_MAX_NODES];
++   size_t nodeCount;
++} IntelGPUDevice;
++
++typedef struct IntelGPUObservation_ {
++   uint64_t id;
++   uint64_t value[INTELGPU_ENGINE_COUNT];
++   uint64_t memory;
++   unsigned int mask;
++   unsigned int capacity[INTELGPU_ENGINE_COUNT];
++   unsigned int capacityValid;
++   unsigned int capacityExplicit;
++   bool memoryValid;
++} IntelGPUObservation;
++
++typedef struct IntelGPUClient_ {
++   uint64_t id;
++   uint64_t seen;
++   IntelGPUObservation current;
++   uint64_t previous[INTELGPU_ENGINE_COUNT];
++   uint64_t previousMs[INTELGPU_ENGINE_COUNT];
++   unsigned int previousCapacity[INTELGPU_ENGINE_COUNT];
++   unsigned int previousValid;
++   struct IntelGPUClient_* next;
++} IntelGPUClient;
++
++typedef struct IntelGPUClientRef_ {
++   uint64_t id;
++   uint64_t fd;
++   uint64_t seen;
++   uint64_t blocked;
++   struct IntelGPUClientRef_* next;
++} IntelGPUClientRef;
++
++typedef struct IntelGPUProcess_ {
++   uint64_t pid;
++   uint64_t startTime;
++   uint64_t seen;
++   bool startValid;
++   bool incomplete;
++   IntelGPUClientRef* refs;
++   struct IntelGPUProcess_* next;
++} IntelGPUProcess;
++
++static const char* const IntelGPU_engineKeys[INTELGPU_ENGINE_COUNT] = {
++   "drm-engine-render", "drm-engine-compute", "drm-engine-video",
++};
++static const char* const IntelGPU_capacityKeys[INTELGPU_ENGINE_COUNT] = {
++   "drm-engine-capacity-render", "drm-engine-capacity-compute", "drm-engine-capacity-video",
++};
++static IntelGPUClient* clients[INTELGPU_BUCKETS];
++static IntelGPUProcess* processes[INTELGPU_BUCKETS];
++static IntelGPUDevice device;
++static IntelGPUSample sample;
++static bool initialized;
++static bool procScanned;
++static uint64_t lastMonotonicMs;
++static uint64_t cycle;
++
++static char* IntelGPU_trim(char* text) {
++   while (isspace((unsigned char)*text))
++      text++;
++   char* end = text + strlen(text);
++   while (end > text && isspace((unsigned char)end[-1]))
++      *--end = '\0';
++   return text;
++}
++
++static bool IntelGPU_number(const char* text, int base, uint64_t* value, const char** unit) {
++   while (isspace((unsigned char)*text))
++      text++;
++   if (!isdigit((unsigned char)*text))
++      return false;
++   errno = 0;
++   char* end;
++   unsigned long long n = strtoull(text, &end, base);
++   if (errno || end == text)
++      return false;
++   while (isspace((unsigned char)*end))
++      end++;
++   *value = n;
++   *unit = end;
++   return true;
++}
++
++static bool IntelGPU_readText(const char* dir, const char* name, char* buffer, size_t size) {
++   char path[2048];
++   xSnprintf(path, sizeof(path), "%s/%s", dir, name);
++   ssize_t n = Compat_readfile(path, buffer, size);
++   if (n <= 0 || (size_t)n >= size - 1)
++      return false;
++   char* end = buffer + n;
++   while (end > buffer && isspace((unsigned char)end[-1]))
++      *--end = '\0';
++   return true;
++}
++
++static bool IntelGPU_readUnsigned(const char* dir, const char* name, int base, uint64_t* value) {
++   char buffer[64];
++   if (!IntelGPU_readText(dir, name, buffer, sizeof(buffer)))
++      return false;
++   const char* unit;
++   return IntelGPU_number(buffer, base, value, &unit) && !*unit;
++}
++
++static double IntelGPU_readNumber(const char* dir, const char* name, int base) {
++   uint64_t value;
++   if (!IntelGPU_readUnsigned(dir, name, base, &value))
++      return NAN;
++   return (double)value;
++}
++
++static bool IntelGPU_digits(const char* name) {
++   if (!*name)
++      return false;
++   for (; *name; name++)
++      if (!isdigit((unsigned char)*name))
++         return false;
++   return true;
++}
++
++static bool IntelGPU_pciName(const char* name) {
++   if (strlen(name) != 12)
++      return false;
++   for (size_t i = 0; i < 12; i++) {
++      if (i == 4 || i == 7) {
++         if (name[i] != ':')
++            return false;
++      } else if (i == 10) {
++         if (name[i] != '.')
++            return false;
++      } else if (!isxdigit((unsigned char)name[i])) {
++         return false;
++      }
++   }
++   return true;
++}
++
++static void IntelGPU_clearRefs(IntelGPUProcess* owner) {
++   while (owner->refs) {
++      IntelGPUClientRef* next = owner->refs->next;
++      free(owner->refs);
++      owner->refs = next;
++   }
++}
++
++static void IntelGPU_clearProcesses(void) {
++   for (size_t i = 0; i < INTELGPU_BUCKETS; i++) {
++      while (processes[i]) {
++         IntelGPUProcess* next = processes[i]->next;
++         IntelGPU_clearRefs(processes[i]);
++         free(processes[i]);
++         processes[i] = next;
++      }
++   }
++}
++
++static void IntelGPU_clearClients(void) {
++   for (size_t i = 0; i < INTELGPU_BUCKETS; i++) {
++      while (clients[i]) {
++         IntelGPUClient* next = clients[i]->next;
++         free(clients[i]);
++         clients[i] = next;
++      }
++   }
++   procScanned = false;
++}
++
++static bool IntelGPU_startTime(const char* name, uint64_t* startTime) {
++   char relative[512];
++   char buffer[4096];
++   xSnprintf(relative, sizeof(relative), "%s/stat", name);
++   if (!IntelGPU_readText(INTELGPU_PROC_ROOT, relative, buffer, sizeof(buffer)))
++      return false;
++   /* comm can contain spaces and parentheses; fields after its final ')' cannot. */
++   char* field = strrchr(buffer, ')');
++   if (!field)
++      return false;
++   field++;
++   for (size_t n = 3; n <= 22; n++) {
++      while (isspace((unsigned char)*field))
++         field++;
++      if (!*field)
++         return false;
++      char* end = field;
++      while (*end && !isspace((unsigned char)*end))
++         end++;
++      if (n == 22) {
++         *end = '\0';
++         const char* unit;
++         return IntelGPU_number(field, 10, startTime, &unit) && !*unit;
++      }
++      field = end;
++   }
++   return false;
++}
++
++static IntelGPUProcess* IntelGPU_getProcess(uint64_t pid, const char* name, bool create) {
++   size_t bucket = pid % INTELGPU_BUCKETS;
++   IntelGPUProcess* owner = processes[bucket];
++   while (owner && owner->pid != pid)
++      owner = owner->next;
++   if (!owner) {
++      if (!create)
++         return NULL;
++      owner = xCalloc(1, sizeof(*owner));
++      owner->pid = pid;
++      owner->next = processes[bucket];
++      processes[bucket] = owner;
++   }
++   if (owner->seen != cycle) {
++      uint64_t startTime;
++      if (IntelGPU_startTime(name, &startTime)) {
++         if (owner->startValid && owner->startTime != startTime)
++            IntelGPU_clearRefs(owner);
++         owner->startTime = startTime;
++         owner->startValid = true;
++      }
++      owner->seen = cycle;
++      owner->incomplete = false;
++   }
++   return owner;
++}
++
++static void IntelGPU_trackClient(IntelGPUProcess* owner, uint64_t id, uint64_t fd) {
++   IntelGPUClientRef* ref = owner->refs;
++   while (ref && ref->fd != fd)
++      ref = ref->next;
++   if (!ref) {
++      ref = xCalloc(1, sizeof(*ref));
++      ref->fd = fd;
++      ref->next = owner->refs;
++      owner->refs = ref;
++   }
++   ref->id = id;
++   ref->seen = cycle;
++   ref->blocked = 0;
++}
++
++static void IntelGPU_blockClient(IntelGPUProcess* owner, uint64_t fd) {
++   if (!owner)
++      return;
++   for (IntelGPUClientRef* ref = owner->refs; ref; ref = ref->next) {
++      if (ref->fd == fd) {
++         ref->blocked = cycle;
++         return;
++      }
++   }
++}
++
++static void IntelGPU_resetSample(void) {
++   sample = (IntelGPUSample) {
++      .status = INTELGPU_NOT_FOUND,
++      .usage = NAN, .render = NAN, .compute = NAN, .videoRaw = NAN, .video = NAN,
++      .memory = NAN, .clock = NAN, .clockMax = NAN,
++   };
++}
++
++/* Metadata only: no DRM node is opened and no hardware counter is read here. */
++static bool IntelGPU_findDevice(IntelGPUDevice* found) {
++   DIR* dir = opendir(INTELGPU_SYSFS_ROOT "/bus/pci/drivers/i915");
++   if (!dir) {
++      if (errno == EACCES || errno == EPERM)
++         sample.status = INTELGPU_NO_ACCESS;
++      return false;
++   }
++   bool present = false;
++   const struct dirent* entry;
++   while ((entry = readdir(dir))) {
++      if (!IntelGPU_pciName(entry->d_name))
++         continue;
++      IntelGPUDevice candidate = {0};
++      xSnprintf(candidate.dir, sizeof(candidate.dir), INTELGPU_SYSFS_ROOT "/bus/pci/drivers/i915/%s", entry->d_name);
++      uint64_t vendor, product;
++      if (!IntelGPU_readUnsigned(candidate.dir, "vendor", 0, &vendor) || vendor != 0x8086 ||
++            !IntelGPU_readUnsigned(candidate.dir, "device", 0, &product) || product != 0x7d67)
++         continue;
++      char path[2048];
++      xSnprintf(path, sizeof(path), "%s/drm", candidate.dir);
++      DIR* drm = opendir(path);
++      if (!drm)
++         continue;
++      const struct dirent* node;
++      while ((node = readdir(drm))) {
++         const char* name = node->d_name;
++         bool card = String_startsWith(name, "card") && IntelGPU_digits(name + 4);
++         bool render = String_startsWith(name, "renderD") && IntelGPU_digits(name + 7);
++         if (!card && !render)
++            continue;
++         char nodeDir[2048];
++         xSnprintf(nodeDir, sizeof(nodeDir), "%s/drm/%s", candidate.dir, name);
++         if (card && !candidate.card[0])
++            xSnprintf(candidate.card, sizeof(candidate.card), "%s/drm/%s", candidate.dir, name);
++         char buffer[64];
++         unsigned int majorNumber, minorNumber;
++         char extra;
++         if (candidate.nodeCount < INTELGPU_MAX_NODES && IntelGPU_readText(nodeDir, "dev", buffer, sizeof(buffer)) &&
++               sscanf(buffer, "%u:%u %c", &majorNumber, &minorNumber, &extra) == 2)
++            candidate.nodes[candidate.nodeCount++] = makedev(majorNumber, minorNumber);
++      }
++      closedir(drm);
++      struct stat st;
++      if (!candidate.card[0] || stat(candidate.card, &st) != 0)
++         continue;
++      candidate.fsDevice = st.st_dev;
++      candidate.inode = st.st_ino;
++      xSnprintf(candidate.pci, sizeof(candidate.pci), "%s", entry->d_name);
++      if (!present || strcmp(candidate.pci, found->pci) < 0) {
++         *found = candidate;
++         present = true;
++      }
++   }
++   closedir(dir);
++   return present;
++}
++
++static bool IntelGPU_memory(const char* text, uint64_t* bytes) {
++   uint64_t value;
++   const char* unit;
++   if (!IntelGPU_number(text, 10, &value, &unit))
++      return false;
++   uint64_t scale = 1;
++   if (String_eq(unit, "KiB") || String_eq(unit, "kB")) {
++      scale = 1024;
++   } else if (String_eq(unit, "MiB")) {
++      scale = 1024 * 1024;
++   } else if (*unit && !String_eq(unit, "B")) {
++      return false;
++   }
++   if (value > UINT64_MAX / scale)
++      return false;
++   *bytes = value * scale;
++   return true;
++}
++
++static int IntelGPU_parse(char* buffer, IntelGPUObservation* out) {
++   char driver[32] = "";
++   char pci[32] = "";
++   bool idValid = false;
++   *out = (IntelGPUObservation) {
++      .capacity = {1, 1, 1}, .capacityValid = INTELGPU_ALL_ENGINES,
++   };
++   char* line;
++   while ((line = strsep(&buffer, "\n"))) {
++      char* delim = strchr(line, ':');
++      if (!delim)
++         continue;
++      *delim = '\0';
++      char* text = IntelGPU_trim(delim + 1);
++      uint64_t value;
++      const char* unit;
++      if (String_eq(line, "drm-driver")) {
++         if (strlen(text) >= sizeof(driver))
++            return false;
++         xSnprintf(driver, sizeof(driver), "%s", text);
++      } else if (String_eq(line, "drm-pdev")) {
++         if (strlen(text) >= sizeof(pci))
++            return false;
++         xSnprintf(pci, sizeof(pci), "%s", text);
++      } else if (String_eq(line, "drm-client-id")) {
++         idValid = IntelGPU_number(text, 10, &out->id, &unit) && !*unit;
++      } else if (String_eq(line, "drm-total-system0")) {
++         out->memoryValid = IntelGPU_memory(text, &out->memory);
++      } else {
++         for (size_t e = 0; e < INTELGPU_ENGINE_COUNT; e++) {
++            unsigned int bit = 1U << e;
++            if (String_eq(line, IntelGPU_engineKeys[e])) {
++               if (IntelGPU_number(text, 10, &value, &unit) && String_eq(unit, "ns")) {
++                  out->value[e] = value;
++                  out->mask |= bit;
++               }
++            } else if (String_eq(line, IntelGPU_capacityKeys[e])) {
++               if (!IntelGPU_number(text, 10, &value, &unit) || *unit || !value || value > 1024 ||
++                     ((out->capacityExplicit & bit) && out->capacity[e] != value)) {
++                  out->capacityValid &= ~bit;
++               } else {
++                  out->capacity[e] = (unsigned int)value;
++               }
++               out->capacityExplicit |= bit;
++            }
++         }
++      }
++   }
++   if (!String_eq(driver, "i915") || !String_eq(pci, device.pci))
++      return 0;
++   return idValid ? 1 : -1;
++}
++
++static void IntelGPU_observe(const IntelGPUObservation* observation) {
++   size_t bucket = observation->id % INTELGPU_BUCKETS;
++   IntelGPUClient* client = clients[bucket];
++   while (client && client->id != observation->id)
++      client = client->next;
++   if (!client) {
++      client = xCalloc(1, sizeof(*client));
++      client->id = observation->id;
++      client->next = clients[bucket];
++      clients[bucket] = client;
++   }
++   if (client->seen != cycle) {
++      client->seen = cycle;
++      client->current = (IntelGPUObservation) {
++         .capacity = {1, 1, 1}, .capacityValid = INTELGPU_ALL_ENGINES,
++      };
++      sample.clients++;
++   }
++   IntelGPUObservation* current = &client->current;
++   for (size_t e = 0; e < INTELGPU_ENGINE_COUNT; e++) {
++      unsigned int bit = 1U << e;
++      if (observation->mask & bit) {
++         if (!(current->mask & bit) || observation->value[e] > current->value[e])
++            current->value[e] = observation->value[e];
++         current->mask |= bit;
++      }
++      if (observation->capacityExplicit & bit) {
++         if ((current->capacityExplicit & bit) && current->capacity[e] != observation->capacity[e])
++            current->capacityValid &= ~bit;
++         current->capacity[e] = observation->capacity[e];
++         current->capacityExplicit |= bit;
++      }
++   }
++   current->capacityValid &= observation->capacityValid;
++   if (observation->memoryValid && !current->memoryValid) {
++      current->memory = observation->memory;
++      current->memoryValid = true;
++   }
++}
++
++static bool IntelGPU_drmFile(const char* path, bool* denied) {
++   struct stat st;
++   if (stat(path, &st) != 0) {
++      *denied = errno == EACCES || errno == EPERM;
++      return false;
++   }
++   if (!S_ISCHR(st.st_mode))
++      return false;
++   for (size_t i = 0; i < device.nodeCount; i++)
++      if (st.st_rdev == device.nodes[i])
++         return true;
++   return false;
++}
++
++static void IntelGPU_finishProcesses(void) {
++   for (size_t i = 0; i < INTELGPU_BUCKETS; i++) {
++      IntelGPUProcess** link = &processes[i];
++      while (*link) {
++         IntelGPUProcess* owner = *link;
++         if (owner->seen != cycle)
++            IntelGPU_clearRefs(owner);
++         IntelGPUClientRef** refLink = &owner->refs;
++         while (*refLink) {
++            IntelGPUClientRef* ref = *refLink;
++            if (ref->seen != cycle) {
++               if (!owner->incomplete && ref->blocked != cycle) {
++                  *refLink = ref->next;
++                  free(ref);
++                  continue;
++               }
++               /* A shared client may still be readable through another owner. */
++               const IntelGPUClient* client = clients[ref->id % INTELGPU_BUCKETS];
++               while (client && client->id != ref->id)
++                  client = client->next;
++               if (!client || client->seen != cycle)
++                  sample.incomplete = true;
++            }
++            refLink = &ref->next;
++         }
++         if (!owner->refs) {
++            *link = owner->next;
++            free(owner);
++            continue;
++         }
++         link = &owner->next;
++      }
++   }
++}
++
++static void IntelGPU_finishClients(uint64_t monotonicMs) {
++   double rates[INTELGPU_ENGINE_COUNT] = {0};
++   bool complete[INTELGPU_ENGINE_COUNT] = {!sample.incomplete, !sample.incomplete, !sample.incomplete};
++   unsigned int capacity[INTELGPU_ENGINE_COUNT] = {0};
++   bool capacityValid[INTELGPU_ENGINE_COUNT] = {true, true, true};
++   uint64_t memory = 0;
++   bool overflow = false;
++   for (size_t i = 0; i < INTELGPU_BUCKETS; i++) {
++      IntelGPUClient** link = &clients[i];
++      while (*link) {
++         IntelGPUClient* client = *link;
++         if (client->seen != cycle) {
++            *link = client->next;
++            free(client);
++            continue;
++         }
++         const IntelGPUObservation* current = &client->current;
++         if (current->memoryValid) {
++            if (UINT64_MAX - memory < current->memory)
++               overflow = true;
++            else
++               memory += current->memory;
++            sample.memoryClients++;
++         }
++         for (size_t e = 0; e < INTELGPU_ENGINE_COUNT; e++) {
++            unsigned int bit = 1U << e;
++            if (!capacity[e])
++               capacity[e] = current->capacity[e];
++            if (capacity[e] != current->capacity[e] || !(current->capacityValid & bit)) {
++               complete[e] = false;
++               capacityValid[e] = false;
++            }
++            if (!(current->mask & current->capacityValid & bit)) {
++               client->previousValid &= ~bit;
++               complete[e] = false;
++               continue;
++            }
++            bool previous = (client->previousValid & bit) && client->previousCapacity[e] == current->capacity[e];
++            if (previous && current->value[e] < client->previous[e]) {
++               /* The ABI allows temporary backward reports: retain the high-water mark and its time. */
++               complete[e] = false;
++               continue;
++            }
++            double elapsed = (double)(monotonicMs - client->previousMs[e]) * 1000000.0;
++            if (previous && elapsed > 0.0) {
++               double delta = (double)(current->value[e] - client->previous[e]);
++               /* Driver accounting isn't synchronized to this clock; allow bounded overshoot, not gross jumps. */
++               if (delta > elapsed * current->capacity[e] * INTELGPU_ACCOUNTING_SLACK + 1000000.0) {
++                  client->previousValid &= ~bit;
++                  complete[e] = false;
++                  continue;
++               }
++               rates[e] += delta * 100.0 / elapsed;
++            } else {
++               complete[e] = false;
++            }
++            client->previous[e] = current->value[e];
++            client->previousMs[e] = monotonicMs;
++            client->previousCapacity[e] = current->capacity[e];
++            client->previousValid |= bit;
++         }
++         link = &client->next;
++      }
++   }
++   if (!overflow && (sample.memoryClients || (!sample.clients && !sample.incomplete)))
++      sample.memory = (double)memory;
++   for (size_t e = 0; e < INTELGPU_ENGINE_COUNT; e++)
++      if (rates[e] > capacity[e] * 100.0 * INTELGPU_ACCOUNTING_SLACK + 1.0)
++         complete[e] = false;
++   if (sample.clients || procScanned) {
++      if (complete[INTELGPU_RENDER])
++         sample.render = rates[INTELGPU_RENDER];
++      if (complete[INTELGPU_COMPUTE])
++         sample.compute = rates[INTELGPU_COMPUTE];
++      if (complete[INTELGPU_VIDEO]) {
++         sample.videoRaw = rates[INTELGPU_VIDEO];
++         sample.video = MINIMUM(100.0, sample.videoRaw);
++      }
++      if (isNonnegative(sample.render) && isNonnegative(sample.compute))
++         sample.usage = MINIMUM(100.0, sample.render + sample.compute);
++   }
++   sample.videoCapacity = capacityValid[INTELGPU_VIDEO] ? capacity[INTELGPU_VIDEO] : 0;
++   procScanned = true;
++}
++
++static void IntelGPU_readClients(uint64_t monotonicMs) {
++   if (!device.nodeCount) {
++      IntelGPU_clearClients();
++      return;
++   }
++   DIR* proc = opendir(INTELGPU_PROC_ROOT);
++   if (!proc) {
++      sample.procDenied = errno == EACCES || errno == EPERM;
++      /* Keep ownership through access gaps, but require fresh activity baselines. */
++      IntelGPU_clearClients();
++      return;
++   }
++   sample.procReadable = true;
++   cycle++;
++   const struct dirent* process;
++   while ((process = readdir(proc))) {
++      if (!IntelGPU_digits(process->d_name))
++         continue;
++      uint64_t pid;
++      const char* unit;
++      if (!IntelGPU_number(process->d_name, 10, &pid, &unit) || *unit)
++         continue;
++      IntelGPUProcess* owner = IntelGPU_getProcess(pid, process->d_name, false);
++      char path[2048];
++      xSnprintf(path, sizeof(path), INTELGPU_PROC_ROOT "/%s/fdinfo", process->d_name);
++      DIR* info = opendir(path);
++      if (!info) {
++         if (owner)
++            owner->incomplete = errno != ENOENT && errno != ESRCH;
++         if (errno == EACCES || errno == EPERM)
++            sample.denied++;
++         continue;
++      }
++      const struct dirent* entry;
++      while ((entry = readdir(info))) {
++         if (!IntelGPU_digits(entry->d_name))
++            continue;
++         uint64_t fd;
++         if (!IntelGPU_number(entry->d_name, 10, &fd, &unit) || *unit)
++            continue;
++         xSnprintf(path, sizeof(path), INTELGPU_PROC_ROOT "/%s/fd/%s", process->d_name, entry->d_name);
++         bool denied = false;
++         if (!IntelGPU_drmFile(path, &denied)) {
++            if (denied) {
++               sample.denied++;
++               IntelGPU_blockClient(owner, fd);
++            }
++            continue;
++         }
++         xSnprintf(path, sizeof(path), INTELGPU_PROC_ROOT "/%s/fdinfo/%s", process->d_name, entry->d_name);
++         char buffer[65536];
++         ssize_t n = Compat_readfile(path, buffer, sizeof(buffer));
++         if (n <= 0 || (size_t)n >= sizeof(buffer) - 1) {
++            sample.incomplete = true;
++            IntelGPU_blockClient(owner, fd);
++            if (n == -EACCES || n == -EPERM)
++               sample.denied++;
++            continue;
++         }
++         IntelGPUObservation observation;
++         int parsed = IntelGPU_parse(buffer, &observation);
++         if (parsed > 0) {
++            IntelGPU_observe(&observation);
++            if (!owner)
++               owner = IntelGPU_getProcess(pid, process->d_name, true);
++            IntelGPU_trackClient(owner, observation.id, fd);
++         } else if (parsed < 0) {
++            sample.incomplete = true;
++            IntelGPU_blockClient(owner, fd);
++         }
++      }
++      closedir(info);
++   }
++   closedir(proc);
++   IntelGPU_finishProcesses();
++   IntelGPU_finishClients(monotonicMs);
++}
++
++static void IntelGPU_refresh(uint64_t monotonicMs) {
++   IntelGPU_resetSample();
++   IntelGPUDevice found = {0};
++   if (!IntelGPU_findDevice(&found)) {
++      IntelGPU_clearClients();
++      IntelGPU_clearProcesses();
++      memset(&device, 0, sizeof(device));
++      return;
++   }
++   if (!String_eq(device.pci, found.pci) || !String_eq(device.card, found.card) ||
++         device.fsDevice != found.fsDevice || device.inode != found.inode) {
++      IntelGPU_clearClients();
++      IntelGPU_clearProcesses();
++   }
++   device = found;
++   xSnprintf(sample.pci, sizeof(sample.pci), "%s", device.pci);
++
++   char state[64];
++   if (!IntelGPU_readText(device.dir, "power/runtime_status", state, sizeof(state))) {
++      sample.status = INTELGPU_UNAVAILABLE;
++      IntelGPU_clearClients();
++      return;
++   }
++   if (String_eq(state, "suspended") || String_eq(state, "suspending")) {
++      sample.status = INTELGPU_SUSPENDED;
++      IntelGPU_clearClients();
++      return;
++   }
++   if (!String_eq(state, "active")) {
++      sample.status = INTELGPU_UNAVAILABLE;
++      IntelGPU_clearClients();
++      return;
++   }
++   sample.status = INTELGPU_ACTIVE;
++   char gt[2048];
++   xSnprintf(gt, sizeof(gt), "%s/gt/gt0", device.card);
++   sample.clock = IntelGPU_readNumber(gt, "rps_cur_freq_mhz", 10);
++   sample.clockMax = IntelGPU_readNumber(gt, "rps_max_freq_mhz", 10);
++   IntelGPU_readClients(monotonicMs);
++}
++
++const IntelGPUSample* IntelGPU_getSample(uint64_t monotonicMs) {
++   if (initialized && monotonicMs <= lastMonotonicMs)
++      return &sample;
++   initialized = true;
++   lastMonotonicMs = monotonicMs;
++   IntelGPU_refresh(monotonicMs);
++   return &sample;
++}
+diff --git a/linux/IntelGPU.h b/linux/IntelGPU.h
+new file mode 100644
+index 00000000..db11a453
+--- /dev/null
++++ b/linux/IntelGPU.h
+@@ -0,0 +1,46 @@
++#ifndef HEADER_IntelGPU
++#define HEADER_IntelGPU
++/*
++htop - linux/IntelGPU.h
++(C) 2026 orlfman
++Released under the GNU GPLv2+, see the COPYING file
++in the source distribution for its full text.
++*/
++
++#include <stdbool.h>
++#include <stdint.h>
++
++
++typedef enum IntelGPUStatus_ {
++   INTELGPU_NOT_FOUND,
++   INTELGPU_SUSPENDED,
++   INTELGPU_ACTIVE,
++   INTELGPU_NO_ACCESS,
++   INTELGPU_UNAVAILABLE,
++} IntelGPUStatus;
++
++/* Activity and memory cover readable clients only; unavailable values are NAN. */
++typedef struct IntelGPUSample_ {
++   IntelGPUStatus status;
++   char pci[16];
++   unsigned int clients;
++   unsigned int denied;
++   unsigned int memoryClients;
++   unsigned int videoCapacity;
++   bool procReadable;
++   bool procDenied;
++   bool incomplete;
++   double usage;         /* render + compute work index, displayed at most 100% */
++   double render;        /* uncapped engine-time / elapsed-time percentages */
++   double compute;
++   double videoRaw;
++   double video;         /* shared encode/decode work index, at most 100% */
++   double memory;        /* approximate allocated system bytes, not resident/VRAM */
++   double clock;         /* requested render GT frequency, MHz */
++   double clockMax;      /* current configured maximum, MHz */
++} IntelGPUSample;
++
++/* All Intel meters share one sample per newer monotonicMs; deltas need a baseline. */
++const IntelGPUSample* IntelGPU_getSample(uint64_t monotonicMs);
++
++#endif /* HEADER_IntelGPU */
+diff --git a/linux/IntelGPUMeter.c b/linux/IntelGPUMeter.c
+new file mode 100644
+index 00000000..e3aa4a75
+--- /dev/null
++++ b/linux/IntelGPUMeter.c
+@@ -0,0 +1,199 @@
++/*
++htop - linux/IntelGPUMeter.c
++(C) 2026 orlfman
++Released under the GNU GPLv2+, see the COPYING file
++in the source distribution for its full text.
++*/
++
++#include "config.h" // IWYU pragma: keep
++
++#include "linux/IntelGPUMeter.h"
++
++#include <math.h>
++#include <stdbool.h>
++
++#include "CRT.h"
++#include "Macros.h"
++#include "Meter.h"
++#include "MeterMode.h"
++#include "Object.h"
++#include "RichString.h"
++#include "XUtils.h"
++#include "linux/IntelGPU.h"
++
++
++static const int IntelGPUMeter_attributes[] = { GPU_ENGINE_3 };
++static const int IntelGPUVideoMeter_attributes[] = { GPU_ENGINE_4 };
++static const int IntelGPUMemoryMeter_attributes[] = { MEMORY_1 };
++static const int IntelGPUInfoMeter_attributes[] = { METER_TEXT };
++
++static const IntelGPUSample* IntelGPUMeter_getSample(const Meter* this) {
++   return IntelGPU_getSample(this->host->monotonicMs);
++}
++
++static const char* IntelGPUMeter_status(const IntelGPUSample* sample) {
++   if (sample->status == INTELGPU_SUSPENDED)
++      return "sleep";
++   if (sample->status == INTELGPU_NO_ACCESS || sample->procDenied)
++      return "no access";
++   return "N/A";
++}
++
++static bool IntelGPUMeter_unavailable(Meter* this, const IntelGPUSample* sample, double value) {
++   if (sample->status == INTELGPU_ACTIVE && isNonnegative(value))
++      return false;
++   this->values[0] = NAN;
++   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%s", IntelGPUMeter_status(sample));
++   return true;
++}
++
++static void IntelGPUInfoMeter_updateValues(Meter* this) {
++   const IntelGPUSample* sample = IntelGPUMeter_getSample(this);
++   if (sample->status == INTELGPU_ACTIVE && !sample->procDenied) {
++      this->txtBuffer[0] = '\0';
++      return;
++   }
++   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), ": %s", IntelGPUMeter_status(sample));
++}
++
++static void IntelGPUUsageMeter_updateValues(Meter* this) {
++   const IntelGPUSample* sample = IntelGPUMeter_getSample(this);
++   if (IntelGPUMeter_unavailable(this, sample, sample->usage))
++      return;
++   this->values[0] = sample->usage;
++   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%.0f%%", sample->usage);
++}
++
++static void IntelGPUVideoMeter_updateValues(Meter* this) {
++   const IntelGPUSample* sample = IntelGPUMeter_getSample(this);
++   if (IntelGPUMeter_unavailable(this, sample, sample->video))
++      return;
++   this->values[0] = sample->video;
++   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%.0f%% E/D", sample->video);
++}
++
++static void IntelGPUClockMeter_updateValues(Meter* this) {
++   const IntelGPUSample* sample = IntelGPUMeter_getSample(this);
++   if (IntelGPUMeter_unavailable(this, sample, sample->clock))
++      return;
++   this->values[0] = sample->clock;
++   if (isPositive(sample->clockMax)) {
++      this->total = sample->clockMax;
++   } else if (this->mode == BAR_METERMODE || this->mode == GRAPH_METERMODE) {
++      this->values[0] = NAN;
++   }
++   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%.0fMHz", sample->clock);
++}
++
++static void IntelGPUMemoryMeter_updateValues(Meter* this) {
++   const IntelGPUSample* sample = IntelGPUMeter_getSample(this);
++   if (IntelGPUMeter_unavailable(this, sample, sample->memory))
++      return;
++   this->values[0] = sample->memory / 1024.0;
++   char buffer[50];
++   Meter_humanUnit(buffer, this->values[0], sizeof(buffer));
++   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%s", buffer);
++}
++
++static void IntelGPUMeter_display(const Object* cast, RichString* out) {
++   const Meter* this = (const Meter*)cast;
++   RichString_writeAscii(out, CRT_colors[METER_TEXT], ":");
++   RichString_appendAscii(out, CRT_colors[METER_VALUE], this->txtBuffer);
++}
++
++static void IntelGPUMeter_displayText(const Object* cast, RichString* out) {
++   const Meter* this = (const Meter*)cast;
++   RichString_writeAscii(out, CRT_colors[METER_VALUE], this->txtBuffer);
++}
++
++const MeterClass IntelGPUInfoMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++   },
++   .updateValues = IntelGPUInfoMeter_updateValues,
++   .defaultMode = TEXT_METERMODE,
++   .supportedModes = 1 << TEXT_METERMODE,
++   .maxItems = 0,
++   .total = 0.0,
++   .attributes = IntelGPUInfoMeter_attributes,
++   .name = "IntelGPUInfo",
++   .uiName = "Intel iGPU heading",
++   .caption = "Intel iGPU",
++   .description = "Intel iGPU statistics cover readable applications, not all device activity"
++};
++
++const MeterClass IntelGPUUsageMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++      .display = IntelGPUMeter_display,
++   },
++   .updateValues = IntelGPUUsageMeter_updateValues,
++   .defaultMode = BAR_METERMODE,
++   .supportedModes = METERMODE_DEFAULT_SUPPORTED,
++   .maxItems = 1,
++   .isPercentChart = true,
++   .total = 100.0,
++   .attributes = IntelGPUMeter_attributes,
++   .name = "IntelGPUUsage",
++   .uiName = "Intel iGPU utilization",
++   .caption = "iGP",
++   .description = "Visible-client render + compute work index, capped at 100%"
++};
++
++const MeterClass IntelGPUVideoMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++      .display = IntelGPUMeter_display,
++   },
++   .updateValues = IntelGPUVideoMeter_updateValues,
++   .defaultMode = BAR_METERMODE,
++   .supportedModes = METERMODE_DEFAULT_SUPPORTED,
++   .maxItems = 1,
++   .isPercentChart = true,
++   .total = 100.0,
++   .attributes = IntelGPUVideoMeter_attributes,
++   .name = "IntelGPUVideo",
++   .uiName = "Intel iGPU video encode/decode",
++   .caption = "Vid",
++   .description = "Visible-client shared encode/decode work index, capped at 100%"
++};
++
++const MeterClass IntelGPUClockMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++      .display = IntelGPUMeter_displayText,
++   },
++   .updateValues = IntelGPUClockMeter_updateValues,
++   .defaultMode = TEXT_METERMODE,
++   .supportedModes = METERMODE_DEFAULT_SUPPORTED,
++   .maxItems = 1,
++   .isPercentChart = true,
++   .total = 1.0,
++   .attributes = IntelGPUMeter_attributes,
++   .name = "IntelGPUClock",
++   .uiName = "Intel iGPU requested clock",
++   .caption = "iGPU clock: ",
++   .description = "Requested render GT clock in MHz; charts scale to the current configured maximum"
++};
++
++const MeterClass IntelGPUMemoryMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++      .display = IntelGPUMeter_displayText,
++   },
++   .updateValues = IntelGPUMemoryMeter_updateValues,
++   .defaultMode = TEXT_METERMODE,
++   .supportedModes = (1 << TEXT_METERMODE) | (1 << LED_METERMODE),
++   .maxItems = 1,
++   .total = 0.0,
++   .attributes = IntelGPUMemoryMeter_attributes,
++   .name = "IntelGPUMemory",
++   .uiName = "Intel iGPU allocated memory",
++   .caption = "iGPU mem: ",
++   .description = "Approximate visible-client allocated system memory; shared buffers can overlap"
++};
+diff --git a/linux/IntelGPUMeter.h b/linux/IntelGPUMeter.h
+new file mode 100644
+index 00000000..dd2e91f0
+--- /dev/null
++++ b/linux/IntelGPUMeter.h
+@@ -0,0 +1,19 @@
++#ifndef HEADER_IntelGPUMeter
++#define HEADER_IntelGPUMeter
++/*
++htop - linux/IntelGPUMeter.h
++(C) 2026 orlfman
++Released under the GNU GPLv2+, see the COPYING file
++in the source distribution for its full text.
++*/
++
++#include "Meter.h"
++
++
++extern const MeterClass IntelGPUInfoMeter_class;
++extern const MeterClass IntelGPUUsageMeter_class;
++extern const MeterClass IntelGPUClockMeter_class;
++extern const MeterClass IntelGPUMemoryMeter_class;
++extern const MeterClass IntelGPUVideoMeter_class;
++
++#endif /* HEADER_IntelGPUMeter */
+diff --git a/linux/Platform.c b/linux/Platform.c
+index b41ac7d6..bc7783fc 100644
+--- a/linux/Platform.c
++++ b/linux/Platform.c
+@@ -52,6 +52,7 @@ in the source distribution for its full text.
+ #include "linux/Compat.h"
+ #include "linux/IOPriority.h"
+ #include "linux/IOPriorityPanel.h"
++#include "linux/IntelGPUMeter.h"
+ #include "linux/IntelRAPLMeter.h"
+ #include "linux/LinuxMachine.h"
+ #include "linux/LinuxProcess.h"
+@@ -291,6 +292,11 @@ const MeterClass* const Platform_meterTypes[] = {
+    &AMDGPUVideoMeter_class,
+    &AMDGPUFanMeter_class,
+    &IntelCPUPowerMeter_class,
++   &IntelGPUInfoMeter_class,
++   &IntelGPUUsageMeter_class,
++   &IntelGPUClockMeter_class,
++   &IntelGPUMemoryMeter_class,
++   &IntelGPUVideoMeter_class,
+    NULL
+ };
+ 

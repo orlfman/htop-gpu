@@ -1,24 +1,44 @@
 # htop-gpu: plan
 
-Status (2026-10-28): steps 1–5 done. `amdgpu-meters` = `6813391d` sampler,
+Status (2026-10-29): steps 1–5 done. `amdgpu-meters` = `6813391d` sampler,
 `7171bb46` GPU usage / VRAM / power, `0b54b642` temperatures and clocks,
 `4870d3a8` video engine, `762add8d` own config file, `631bc883` fan meter,
-`363370bd` Intel CPU power, `6c06d243` PL1 refresh, `61c598b1` CPU Pwr caption;
-all pushed. htop-gpu 3.5.3-8 is installed as `htop-gpu` next to the repo `htop`, each with its own
+`363370bd` Intel CPU power, `6c06d243` PL1 refresh, `61c598b1` CPU Pwr caption,
+`bb4f7331` Intel iGPU meters; all pushed. htop-gpu 3.5.3-12 is installed as `htop-gpu` next to the repo `htop`, each with its own
 config (`~/.config/htop-gpu/htop-gpurc` with the GPU column, `~/.config/htop/htoprc`
 two columns). All five audit findings are fixed; findings 1-4 were
 independently re-tested, and Codex validated the finding 5 idle-clock test
 fix with zero-clock and invalid-reading regressions. See AUDIT.md.
 Intel PL1 staleness (finding 6) is fixed in `6c06d243`, first installed in
 3.5.3-7 and retained in 3.5.3-8; finding 7 (P3, later CPU packages) is deferred at the user's
-request. Secondary plan ready: [Intel iGPU below the AMD meters](PLAN-INTEL-IGPU.md),
-based on the 270K Plus hardware investigation. Implementation has not started.
-Baseline refined on 2026-10-29: utilization, clock, memory usage, and shared
-video encode/decode, using Mission Center as the reference; extra engine rows
-are deferred. Memory usage is included in the first version.
-Next: that plan or other optional step 6 items when requested.
+request. The [Intel iGPU baseline](PLAN-INTEL-IGPU.md) is implemented, tested,
+and installed: visible-app utilization, requested clock, approximate allocated memory,
+and combined video encode/decode. The revised plan was committed and pushed
+first as outer `b145c766`. Claude Code reviewed the implementation on 2026-10-29
+and committed it as `bb4f7331`; the re-exported patch 0010 has the same code
+the installed 3.5.3-12 was built from.
+Build, style, stateful fake tests/negative controls, pinned live Intel workloads,
+existing regression suites, and full sanitized meter checks passed; see AUDIT.md
+for results and remaining real suspend/Mission Center comparison limits.
+Installed 3.5.3-12 passes integrity checks and matches the tested package binary.
+The Intel clock/memory readouts now show just MHz and memory amount at the user's
+request; requested-clock/allocation semantics remain in the meter descriptions.
+The normal heading is now just `Intel iGPU`, with sleep/access/error indications
+retained; visible-app scope remains in the meter descriptions.
+The user's actual third column now has Intel below the eight AMD rows, with
+spacer/heading/four stats (fourteen rows). Config backup:
+`~/.config/htop-gpu/htop-gpurc.bak-2026-10-29_14-47-46`.
+Stock htop and its config are unchanged. Next: commit/push the implementation and
+release records when requested, plus remaining idle-PM/reference comparisons.
+Extra Intel engine rows remain deferred.
+Finding 8 (P2) is fixed and validated in 3.5.3-12. Known Intel client ownership
+is tracked by PID/starttime/FD, so access loss reports unavailable rather than
+false zero; shared aliases, exits, reuse, and unrelated denials remain correct.
+All 18 stateful fake groups/three negative controls passed; the old source fails
+ten new assertions. Full sanitized meter transitions and package checks passed.
+No new GPU load tests; real PM/reference comparison limits remain. See AUDIT.md.
 
-In progress: Codex, commit revised plan, then implement the Intel iGPU baseline.
+In progress: nobody.
 
 GitHub (both private): https://github.com/orlfman/htop-gpu (this folder) and
 https://github.com/orlfman/htop (branch `amdgpu-meters`).

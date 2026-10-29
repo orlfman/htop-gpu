@@ -1,8 +1,8 @@
 # htop-gpu audit findings
 
-Date: 2026-10-28 (America/Phoenix).
+Original audit: 2026-10-28 (America/Phoenix). Latest Intel audit: 2026-10-29.
 Auditor: Codex.
-Status: findings 1-6 are resolved and validated; finding 6 is committed (`6c06d243`) and retained in installed `htop-gpu 3.5.3-8`, which labels CPU power Pwr. Finding 7 (P3) is deferred at the user's request.
+Status: findings 1-6 are resolved and validated; finding 6 is committed (`6c06d243`) and retained in installed `htop-gpu 3.5.3-12`, which labels CPU power Pwr. Finding 7 (P3) is deferred at the user's request. Finding 8 (P2, Intel client access loss reported as zero) is fixed and validated in 3.5.3-12; see the fix validation below.
 P2 means normal priority; P3 means low priority.
 
 ## Scope and baseline
@@ -991,3 +991,606 @@ document-link/fence checks, whitespace checks, and protected-file hashes.
 No project build or full regression suite was run for these documentation edits.
 The four docs remain uncommitted; no push or installation was performed.
 In progress is back to nobody; implementation has not started.
+
+
+## Intel iGPU implementation and validation
+
+Date: 2026-10-29 (America/Phoenix). Codex.
+Scope: user requested committing/pushing the revised plan first, then implementing
+the Mission Center baseline: utilization, clock, memory, video encode/decode.
+No new unresolved defect findings in this scoped validation. Finding 7 remains
+deferred; the validation/release limits below remain open.
+
+### Audited versions and changes
+
+- Revised plan committed/pushed to outer `origin/main` as
+  `b145c76657dea3549f8f8512811efaec347b9abd` before source implementation.
+- Source baseline remains `61c598b1a128e06864a4f071347d6ed63ce71282` on
+  `amdgpu-meters`; the audited implementation is the uncommitted working tree.
+  Installed package remains htop-gpu 3.5.3-8; stock htop 3.5.3-1.1.
+- New source: `linux/IntelGPU.{c,h}`, `linux/IntelGPUMeter.{c,h}`.
+  Existing source edits: only Makefile list entries and Platform include/registry
+  lines. Upstream GPU accumulator, process columns, AMD/RAPL code are unchanged.
+- New tests: `tools/intel-gpu-sample.c`, `tools/test-intel-gpu.py`.
+  Style gate includes the new driver; AGENTS.md documents the Intel suite.
+  No new production command, library, daemon, elevated access, or runtime package.
+
+### Implemented behavior reviewed
+
+Discovery finds the supported i915 `8086:7d67` device, its DRM card/render device
+numbers, and GT0 dynamically; no boot-specific card/render number is compiled in.
+Selection is deterministic by PCI address. Node identity/driver/PCI checks exclude
+AMD fdinfo. Device/card changes invalidate previous samples. No render node is
+opened by the sampler, and runtime status is checked before dynamic reads.
+
+All meters share a newer-tick cache. Histories are per 64-bit DRM client ID under
+the selected PCI device, globally deduplicated across FDs and processes.
+Independent engine baselines, elapsed monotonic time, counter high-water marks,
+capacity changes, missing reads, expired clients, and reappearance are handled
+without using a new client's lifetime work as its current interval.
+Raw render/compute/video rates and video capacity remain available in the sample.
+The utilization index is capped render+compute; video is one capped shared E/D
+engine-equivalent index, with no division by two for the display convention.
+
+Clock uses requested GT0 MHz and rereads its mutable configured maximum.
+Memory sums valid allocated `drm-total-system0` bytes once per visible client,
+with checked unit conversion/overflow. It does not add resident/shared counters.
+Memory text and LED show approximate absolute usage; bar/graph modes are omitted
+because no validated global denominator exists. Shared objects can overlap across
+different client IDs. Missing fields/access are distinguished from known zero.
+The heading says visible apps, with known partial/no-access status. Inaccessible
+process directories are counted as coverage limits, not presumed GPU clients.
+
+### Failures traced and corrected during development
+
+1. The initial decode workload failed with an `Operation not permitted` seek
+   error when looping raw H.264. Intel video counters still responded, but the
+   fixture itself was invalid. Replaced it with a temporary MP4 and a single
+   five-second decode. Final pinned encode and decode both exited 0, no stderr.
+   No permission or production-code workaround was needed for this test error.
+2. An initial 5% accounting tolerance caused intermittent N/A during valid Intel
+   graphics load. A traced interval reported about 446 ms render time over
+   410 ms wall time. Driver updates are not synchronized to sampler timestamps.
+   The final plausibility guard allows bounded 25% mismatch plus rounding while
+   rejecting gross jumps; display saturation remains separate. A 110% fake
+   regression retains raw 110 and displays 100. The follow-up live trace had
+   14 valid post-baseline intervals, raw render 92.38–109.38%, no N/A gaps.
+3. Final review found invalid/conflicting video capacity could leave misleading
+   capacity metadata even while activity was unavailable. It now reports zero
+   (unavailable). The exact final source passed fake tests/negative controls and
+   a full sanitized htop display smoke after this correction.
+
+These issues were resolved before handoff; none is an outstanding audit finding.
+
+### Validation completed
+
+- Normal htop build: exit 0, zero warnings. Initial float-ID comparison warnings
+  were removed by parsing vendor/device IDs as integers.
+- `tools/check-style.sh`: `STYLE OK`, including all four new source/header files
+  and the new standalone driver. `tools/test-check-style.sh`: all seven passed.
+- `python3 -I tools/test-intel-gpu.py --mutations`: `ALL PASSED` under ASan/UBSan.
+  Ten stateful fake scenarios cover activity/cache, allocated versus resident
+  memory, global fork/FD deduplication, AMD/other-PCI filtering, 64-bit IDs,
+  valid timing overshoot, video capacity/default/change/malformed/recovery,
+  discovery/unbind/rebind/card renumbering, suspend/wake, backwards counters,
+  corrupt jumps, missing fields/client exit/reuse, units/overflow, access loss,
+  zero/missing/requested-versus-actual clocks, and mutable maxima.
+  Three negative controls fail when device filtering, global deduplication,
+  or dual-video capacity handling is deliberately broken.
+- Live workloads pinned to Intel: five-second VA-API encode peaked at 32.7%
+  video, decode at 18.7%, and an offscreen Vulkan graphics workload reached 100%
+  utilization. Valid allocated memory and requested clock/max were observed
+  for each; GT0 requested 2000 MHz under graphics load. Workloads exited 0 and
+  the sanitized sampler had no diagnostics. No real user media was used.
+- `python3 -I tools/test-sampler.py`: `ALL PASSED`; AMD encode reached 100%
+  video, 2933/2200 MHz video clocks, sanitizer clean.
+- `python3 -I tools/test-rapl.py`: `ALL PASSED`; live pre-load/busy readings
+  26.315/130.022 W. Concurrent activity makes these observations, not a benchmark.
+- `tools/test-config-path.sh`: all 33 checks passed using disposable homes.
+  No production config-handling change was made.
+- Whole htop ASan/UBSan build and normal rebuild: zero warnings. Production
+  Intel meters ran in one sanitized fake-root process through nine display
+  stages: initial, changed, invalid/missing, zero recovered, sleep, wake,
+  known-Intel-FD partial denial, whole-proc denial, and final recovery.
+  Tested bar/text/graph/LED where supported, memory text/LED, and text heading.
+  Clock/memory values changed and cleared correctly; no-access retained valid
+  clock text; sleep cleared old values. Process exit 0, no sanitizer reports.
+- Exact final source: repeated fake-only suite with all negative controls,
+  style, normal build, and sanitized whole-program display smoke passed.
+  No live repeat after the final capacity-metadata correction because the user
+  asked about playing a game; the corrected path is exercised by fake tests.
+- Actual disposable third-column capture retained eight AMD rows, then spacer,
+  Intel heading and four stats: 100% utilization, 2000 MHz requested,
+  approximately 272 MiB allocated, and 0% E/D during the graphics workload.
+  Preview is `test/intel-igpu-preview.rc` with capture `.txt` (ignored artifacts).
+- One short CPU-cost observation, same copied base layout: installed build
+  used 0.168 CPU seconds over 6.090 seconds; development with Intel block used
+  0.270 over 6.082 seconds, about 1.7 additional percentage points of one core.
+  Sanitized standalone scanning under graphics load had median 11.008 ms,
+  maximum 14.046 ms. These uncontrolled short observations do not establish a
+  stable overhead guarantee, especially with other desktop/game activity.
+
+### Limits, preservation, and handoff
+
+Real runtime suspend was observed before initial graphics sampling, and fake
+suspend uses a blocking clock FIFO to prove dynamic files are skipped.
+A later passive PM observation was inconclusive: the iGPU became active before
+the sampler started and stayed active during the observation. External activity
+was not isolated. Kernel v7.3 `intel_rps_read_punit_req` uses runtime-PM-if-in-use
+for requested frequency, but source inspection and fake tests do not prove an
+isolated real idle/suspend result. No forced PM state or power settings changed.
+
+No side-by-side Mission Center UI comparison, isolated compute workload, or
+copy/enhancement workload was performed. Reference-source semantics were checked
+in the preceding planning audit. Activity covers readable clients; short-lived,
+hidden, or raced clients can be omitted. Memory is approximate allocation, not
+unique device-wide resident bytes. Separate encode/decode, PMU, xe/other PCI IDs,
+actual/media clocks, isolated power/temperature, and finding 7 remain deferred.
+Terminal captures check content and state changes, not interactive F2 operation
+or pixel-level graph/LED appearance.
+
+Baseline fingerprints covered 403 files. The final preservation check permits
+only the documented outer docs/style tool and nested registration edits among
+those baseline files; new implementation/tests are additional files. Installed
+binaries, stock files, both real user configs, existing AMD/RAPL sources, and
+packaging were preserved. No settings, drivers, sysctls, udev rules, capabilities,
+packages, or live layout were changed. All temporary GPU workloads finished
+before the promise to avoid further GPU load while the user plays Dune Awakening.
+
+Only the revised plan was committed/pushed. Implementation/tests/handoff docs
+remain uncommitted; no patch export, package build, installation, or real-layout
+edit. Normal development binary is rebuilt. Next step is review/release when
+requested, plus the remaining real PM/reference comparison checks.
+PLAN.md/CHANGELOG.md updated; in progress nobody.
+
+
+## Intel iGPU release: install and user layout
+
+Date: 2026-10-29 (America/Phoenix). Codex.
+Scope: the user authorized installing the Intel build and updating the actual
+htop-gpu rc to display Intel underneath AMD. No new defect findings in this
+release validation. Previous real-PM/reference-comparison limits and deferred
+finding 7 remain unchanged.
+
+### Packaged source and verification
+
+- Installed before: htop-gpu 3.5.3-8; source HEAD
+  `61c598b1a128e06864a4f071347d6ed63ce71282` plus the Intel working tree reviewed
+  in the preceding audit. No production source changed during this release.
+- New package: `packaging/htop-gpu-3.5.3-9-x86_64.pkg.tar.zst`.
+  PKGBUILD pkgrel is 9, description mentions Intel, and checksums include patch
+  `0010-linux-add-Intel-iGPU-meters.patch`. The first nine patches are unchanged.
+- Patch 0010 captures the six-file working-tree change (four new Intel files,
+  Makefile and Platform registration). Used a separate temporary Git index;
+  neither real index/history was changed. No commit or push for this request.
+  Commit the Intel source before running `tools/export-patches.sh` again,
+  since that tool exports commits and would omit uncommitted Intel code.
+- Applied all ten patches to upstream 3.5.3 in a disposable tree: clean apply,
+  all 368 source files exactly match the current development tree.
+- `MAKEFLAGS=-j2 makepkg -fC --holdver --noconfirm`: exit 0, zero compiler
+  warnings/errors. Existing local source cache used. PKGBUILD SHA-256 matches
+  the built package's `.BUILDINFO`; packaged version is `htop 3.5.3-9-gpu`.
+- `python3 -I tools/test-intel-gpu.py --fake-only --mutations`: `ALL PASSED`
+  including all three deliberate fault controls, ASan/UBSan clean.
+  `tools/check-style.sh`: `STYLE OK`.
+- Extracted package binary passed all 33 `tools/test-config-path.sh` checks
+  in disposable homes and rendered the proposed third column. All Intel meter
+  names persisted after saving the disposable config.
+- No package file paths overlap stock htop's files. Namcap matches the stock
+  package's existing hicolor-icon-theme dependency, implicit glibc, and possibly
+  unneeded libnl diagnostics. Stock additionally reports its GPL license-format
+  issue. No new package diagnostic was introduced by Intel support.
+
+### Installation and actual config change
+
+Noninteractive sudo required a password. Desktop authentication via pkexec
+completed the package-manager upgrade from 3.5.3-8 to 3.5.3-9, exit 0.
+Installed `/usr/bin/htop-gpu` exactly matches the extracted package binary.
+`pacman -Qkk htop-gpu htop`: both have 16 total files and zero altered files.
+Stock htop remains 3.5.3-1.1.
+
+Checked for htop/htop-gpu processes before backing up and immediately before
+atomic replacement; none were running. Backup, byte-for-byte verified:
+`/home/pieman/.config/htop-gpu/htop-gpurc.bak-2026-10-29_14-47-46`.
+
+Only these two lines changed in the real rc:
+
+```text
+column_meters_2=AMDGPUUsage AMDGPUVRAM AMDGPUPower AMDGPUVideo AMDGPUFan AMDGPUTemp AMDGPUClock AMDGPUMemClock Blank IntelGPUInfo IntelGPUUsage IntelGPUClock IntelGPUMemory IntelGPUVideo
+column_meter_modes_2=1 1 1 1 1 2 2 2 2 2 1 2 2 1
+```
+
+This keeps all eight AMD rows and adds spacer, scope heading, utilization bar,
+requested-clock text, approximate-memory text, and combined E/D bar. The right
+column has fourteen rows; the other columns and all other settings are intact.
+File permissions are preserved; stock htop's config is unchanged.
+
+An installed-binary capture using a disposable copy verified AMD rows followed
+by all five Intel entries. That observation showed 0% Intel utilization,
+0 MHz requested, approximately 175 MiB allocated, and 0% E/D. These are passive
+readings while other activity was running, not a new load test or proof of
+device-wide idle. The actual rc remained byte-identical to the intended change
+after the capture; test execution did not rewrite it.
+
+### Preservation and limits
+
+Release baseline fingerprints covered 407 files. Only documented outer release
+docs/PKGBUILD, the installed htop-gpu binary, and the two-line real htop-gpu rc
+change differ among those baseline files. Stock files/config, preexisting
+production source/test tools, and the nine prior patches are unchanged.
+New patch 0010 and the config backup are additional files. Package integrity
+checks validate the installed package files.
+
+No additional GPU load, isolated PM check, or Mission Center comparison was
+performed during this release, honoring the gaming-session constraint.
+The prior live/render/video and full sanitized meter evidence covers the same
+source; the release added fake/stateful/style, packaging, config, integrity,
+and passive display checks. No driver, capability, permission rule, sysctl,
+or GPU setting changes. Package-manager cache/desktop hooks ran normally.
+
+Local evidence/receipt (ignored): `test/intel-igpu-release-2026-10-29/`.
+Source implementation, tests/docs, PKGBUILD, and patch 0010 remain uncommitted;
+no push. Installation and requested layout update are complete.
+PLAN.md, PLAN-INTEL-IGPU.md, AGENTS.md and CHANGELOG.md reflect the release;
+in progress nobody.
+
+
+## Intel readout refinement: clock and memory
+
+Date: 2026-10-29 (America/Phoenix). Codex.
+Scope: user requested frequency without `requested`, and memory amount without
+`~` / `allocated`. No new findings from this scoped display/release validation.
+Prior real-PM/reference-comparison limits and deferred finding 7 are unchanged.
+
+### Audited change
+
+- Before: installed htop-gpu 3.5.3-9; source HEAD `61c598b1` plus the existing
+  uncommitted Intel implementation. After: installed htop-gpu 3.5.3-10.
+- Only two production format strings changed in `linux/IntelGPUMeter.c`:
+  `%.0fMHz requested` to `%.0fMHz`, and `~%s allocated` to `%s`.
+  Values, units, sensor sources, validity, modes, scale, captions, and internal
+  names are unchanged. Requested GT0 clock and approximate visible-client
+  allocated memory remain explained in meter descriptions and project docs.
+- Updated the same working-tree packaging patch 0010, pkgrel 10, and its checksum.
+  Used a separate temporary index; real indexes/history unchanged. No commit/push.
+  Previous Intel implementation/tests/docs remain uncommitted as recorded above.
+
+### Validation and installation
+
+- Normal development build: exit 0, zero warnings.
+- `tools/check-style.sh`: `STYLE OK`.
+  `python3 -I tools/test-intel-gpu.py --fake-only --mutations`: `ALL PASSED`,
+  including three deliberate fault controls, ASan/UBSan clean.
+- Updated the changed meter in the previously built complete sanitized htop
+  tree with ASan/UBSan compile/link flags, zero warnings. A disposable-copy
+  header capture with fake Intel readings displayed `iGPU clock: 800MHz` and
+  `iGPU mem: 4.00M`, with all three removed qualifiers absent from those rows.
+  No sanitizer diagnostics. This was an incremental update of the full-program
+  sanitized build, not a fresh clean rebuild of unchanged modules.
+- `MAKEFLAGS=-j2 makepkg -fC --holdver --noconfirm`: exit 0, zero compiler
+  warnings/errors. All ten patches applied cleanly to upstream 3.5.3 and exactly
+  reproduced all 368 source files. No package paths overlap stock htop.
+- Namcap reports the same known stock-baseline hicolor-icon-theme, implicit
+  glibc, and possibly unneeded libnl diagnostics; no new diagnostics.
+- Extracted package reports `htop 3.5.3-10-gpu`. Passive display capture with
+  a copy of the actual config showed `iGPU clock: 0MHz`, `iGPU mem: 170M`.
+  No `requested`, tilde, or `allocated` in those readouts.
+- Installed via the desktop authentication/package-manager path, exit 0.
+  Installed binary exactly matches the extracted package binary.
+  `pacman -Qkk htop-gpu htop`: 16 total files each, zero altered files.
+  Stock htop remains 3.5.3-1.1.
+- Installed display checked again with a disposable rc copy; all Intel rows
+  render and clock/memory have the shortened formats. The receipt stores the
+  observed values and package/binary fingerprints.
+
+### Preservation and limits
+
+Baseline fingerprints cover 414 tracked/untracked project source/tool/doc files,
+stock htop files, installed binary, and both user configs. Only the two-string
+meter edit, patch 0010/PKGBUILD, installed binary, and release docs changed.
+The sampler, existing test tools, prior nine patches, stock files, both real rc
+files, and the current AMD/Intel layout are unchanged.
+No config edit or new backup was necessary for these text-only changes.
+
+No new tests were added for the two format strings. Reused existing stateful
+fake tests and actual program captures. No additional GPU workload was run,
+honoring the gaming-session constraint. The full AMD/live Intel/RAPL/config
+suites and fresh full clean sanitizer build were not repeated for this display
+change; their earlier evidence covers the unchanged sampling/config code.
+No new device-wide memory accuracy or actual-clock claim is made by shortening
+the readouts. No driver, permission rule, sysctl, or GPU setting changes.
+
+Local evidence/receipt (ignored): `test/intel-labels-release-2026-10-29/`.
+PLAN.md, PLAN-INTEL-IGPU.md, AGENTS.md and CHANGELOG.md updated; in progress nobody.
+
+
+## Intel heading refinement
+
+Date: 2026-10-29 (America/Phoenix). Codex.
+Scope: user requested just `Intel iGPU` without `visible apps`; sleep is retained.
+No new findings from this scoped display/release validation. Previous real-PM/
+reference-comparison limits and deferred finding 7 remain unchanged.
+
+### Change and audited versions
+
+- Before: installed 3.5.3-10. After: installed htop-gpu 3.5.3-11. Source HEAD
+  remains `61c598b1` with the existing uncommitted Intel implementation.
+- Only heading formatting changed in `linux/IntelGPUMeter.c`: normal text is
+  `Intel iGPU`, without a colon or visible-app/partial suffix. Sleep remains
+  `Intel iGPU: sleep`; no-access/unavailable status remains. Explicitly clear
+  the text buffer on normal active samples so old status text cannot linger.
+- Readable-app coverage remains in meter descriptions. Sampler behavior, numeric
+  readouts, meter names/modes, both real configs, and the saved layout are unchanged.
+- Updated working-tree patch 0010, PKGBUILD pkgrel 11, and checksum via a temporary
+  index. No real staging, commit, or push; previous uncommitted work remains.
+
+### Validation
+
+- Normal build: zero warnings. Updated the changed meter in the previously built
+  full ASan/UBSan htop tree with sanitizer compile/link flags, zero warnings.
+- `tools/check-style.sh`: `STYLE OK`. Intel fake/stateful tests with all three
+  negative controls: `ALL PASSED`, ASan/UBSan clean.
+- One complete sanitized htop process ran five heading transitions: active
+  `Intel iGPU` → `Intel iGPU: sleep` → `Intel iGPU` → `Intel iGPU: no access`
+  → `Intel iGPU`. Correct text and suffix clearing throughout; exit 0, no
+  sanitizer diagnostics. Temporary fake runtime/proc-permission changes restored.
+- `MAKEFLAGS=-j2 makepkg -fC --holdver --noconfirm`: exit 0, zero warnings/errors.
+  All ten patches apply cleanly to upstream 3.5.3 and reproduce all 368 source
+  files exactly. No package paths overlap stock htop. Namcap reports only the
+  established stock-baseline hicolor-icon-theme/glibc/libnl diagnostics.
+- Packaged binary reports `htop 3.5.3-11-gpu`. Disposable-copy display confirms
+  the shortened heading/sleep indication with AMD/Intel placement unchanged.
+- Package-manager upgrade through desktop authentication: exit 0. Installed
+  binary exactly matches the package; installed-copy display has no visible-app
+  suffix. Receipt records the observed state. Both htop packages have 16 files
+  and zero altered files; stock htop remains 3.5.3-1.1.
+
+### Preservation and limits
+
+Baseline fingerprints cover 414 project/source/stock/config files. Only the
+heading source, patch 0010/PKGBUILD, installed htop-gpu binary, and release docs
+changed. Sampler, previous nine patches, existing tests/tools, stock htop files,
+and both real rc files are preserved. No config edit/new backup was needed.
+No new permanent tests for this small UI change; used existing fake tests and
+actual stateful program captures. No added GPU workload during the gaming
+session. Unrelated full AMD/RAPL/config/live suites and a fresh clean sanitizer
+rebuild were not repeated; prior results cover their unchanged code.
+No driver, sysctl, capability, permission rule, or GPU setting changes.
+
+Local evidence/receipt (ignored): `test/intel-heading-release-2026-10-29/`.
+Docs and shared status updated; in progress nobody. Source/tests/docs/packaging
+remain uncommitted, with no push. Restart htop-gpu to load the updated executable.
+
+
+## Intel iGPU audit: installed 3.5.3-11
+
+Date: 2026-10-29 (America/Phoenix). Codex.
+Scope: complete Intel sampler/meters/tests/registration/package review after the
+requested readout/heading refinements. One new P2 finding; no production fix.
+
+### Baseline and reviewed behavior
+
+- Outer HEAD `b145c76657dea3549f8f8512811efaec347b9abd`; source HEAD
+  `61c598b1a128e06864a4f071347d6ed63ce71282`, with the existing uncommitted Intel
+  implementation/refinements. Installed htop-gpu 3.5.3-11, stock htop 3.5.3-1.1.
+- Read project handoff and upstream instructions/style, current Intel plan,
+  new source/header files, standalone driver/test suite, existing Meter/Compat
+  behavior, registration, patch 0010, and package metadata.
+- Reviewed device/PCI filtering, global client deduplication, cache, independent
+  engine deltas/high-water marks, capacity guards, expiry/rebind/suspend handling,
+  checked memory accounting, requested clock/max scaling, and supported modes.
+  Independent read-only meter/test/package review found no additional defects.
+- The user's compact heading/readouts are intentional. Readable-client scope,
+  allocated-memory approximation, combined E/D convention, and requested clock
+  are documented constraints, not new defects. Uncommitted-source packaging
+  and remaining real-PM/Mission Center comparisons are already documented.
+
+## 8. [P2] Lost access to a known Intel client can appear as zero usage
+
+Status: fixed and validated in installed 3.5.3-12; the reproduction below is the
+original 3.5.3-11 behavior. See the subsequent finding 8 fix validation.
+
+Primary location: `src/htop/linux/IntelGPU.c:478-481`.
+Related paths: fd stat filtering at lines 363-370 and 487-489; unseen-client
+cleanup at lines 383-386; empty-client output at lines 437-452.
+
+### Reproduction and impact
+
+The exact source was compiled with ASan/UBSan against a private fake sysfs/proc
+root. Each case kept one sampler running across transitions. A readable Intel
+client first reported 10% utilization and 1,048,576 allocated bytes. Then:
+
+| Transition at the next newer tick | Clients | Denied | Incomplete | Usage | Memory |
+| --- | ---: | ---: | --- | ---: | ---: |
+| That process's fdinfo directory becomes inaccessible | 0 | 1 | false | 0% | 0 bytes |
+| Its fd directory becomes inaccessible before node stat | 0 | 0 | false | 0% | 0 bytes |
+| Control: the process really exits | 0 | 0 | false | 0% | 0 bytes |
+
+The two denial cases are therefore presented like the valid exit case. Restored
+access rebaselines and eventually recovers the values. The process remains in
+the fake proc tree throughout denial; this is not a client-exit reproduction.
+All sampler processes exited 0 without sanitizer diagnostics.
+
+The actual production meters in one private full sanitized htop process also
+reproduced `iGPU mem: 4.00M` → `iGPU mem: 0K` → `iGPU mem: 4.00M` on directory
+denial/recovery. The heading remained the intended `Intel iGPU`; no error was
+shown for this lost coverage. This is a misleading availability/zero transition,
+not a crash, system-setting change, or measured loss of real GPU allocation.
+
+A separate real-host probe used a throwaway child that opened only `/dev/null`.
+Toggling its own PR_SET_DUMPABLE produced readable → denied → readable access
+to its fdinfo directory while it remained alive. No Intel/AMD DRM node was
+opened. This establishes that the directory-access transition is possible on
+this kernel; the full GPU accounting case was reproduced with fake data.
+Independent fd-stat-only denial is an additional fake failure path, not a claim
+that ordinary host DAC commonly denies it while fdinfo remains readable.
+Linux documents the [dumpability effect on proc ownership](https://man7.org/linux/man-pages/man2/PR_SET_DUMPABLE.2const.html)
+and [fdinfo access](https://man7.org/linux/man-pages/man5/proc_pid_fdinfo.5.html).
+
+### Cause and suggested correction
+
+Directory-open denial increments `denied` but does not mark loss of a previously
+identified client's data. Node stat failures are silently treated as a non-DRM
+file. Unobserved client records are then freed; an otherwise readable proc scan
+with no observed clients becomes valid zero activity/memory. By contrast, a
+denied fdinfo *file* after successful Intel node identification correctly sets
+`incomplete` and avoids this false zero.
+
+Retain enough process/client ownership information to distinguish inaccessible
+previously identified Intel clients from ordinary exits, unrelated protected
+processes, and PID reuse. Propagate unknown/incomplete coverage where a known
+client cannot be sampled; recover with a safe baseline. Account for a shared
+client that is still readable through another process/descriptor. Do not mark
+every denied process incomplete: many protected processes were never identified
+as Intel clients and are part of the deliberate readable-client scope.
+
+Add stateful tests for known-client fdinfo-directory denial, node-stat denial,
+recovery, actual exit, unrelated protected processes, and shared-client coverage.
+The current access suite tests a denied fdinfo file and an entirely denied proc
+root, so it passes without exercising this intermediate-directory gap.
+
+### Other validation and limits
+
+- Existing `python3 -I tools/test-intel-gpu.py --fake-only --mutations`: all ten
+  fake scenarios and three deliberate fault controls `ALL PASSED`, ASan/UBSan
+  clean. The additional audit probes establish finding 8 despite that pass.
+- `tools/check-style.sh`: `STYLE OK`; normal development build: exit 0, no new
+  warnings. Private incremental full sanitized-program build: exit 0, zero
+  warnings; display reproduction exited 0 with no sanitizer logs. It reused
+  previously sanitized unchanged modules rather than doing a new clean build.
+- Ten patch checksums passed. PKGBUILD fingerprint matches package `.BUILDINFO`;
+  installed binary exactly matches the packaged one. Both installed htop packages
+  have 16 files and zero altered files. No new release or reinstall was performed.
+- Passive host inventory found ten unique readable Intel clients, no missing
+  render/compute/video/allocated-memory keys, video capacity two, and 418 denied
+  fdinfo directories. Those denied directories are not presumed Intel clients
+  and do not demonstrate finding 8 occurring in the user's current workload.
+- The [DRM usage-statistics ABI](https://docs.kernel.org/gpu/drm-usage-stats.html)
+  was checked for identity/deduplication, backward counters, capacities, and
+  allocated/resident semantics. No additional actionable defects were identified.
+- No new GPU load, isolated PM experiment, or side-by-side Mission Center run.
+  Fresh live Intel/AMD/RAPL workloads, unrelated full config suite, interactive
+  F2 testing, and a clean full sanitizer rebuild were not performed in this
+  read-only audit. Earlier live results remain historical evidence.
+
+### Preservation and handoff
+
+Baseline fingerprints cover 418 project/source/tool/config/installed files.
+Only AUDIT.md, PLAN.md, PLAN-INTEL-IGPU.md, and CHANGELOG.md changed. Private
+probes and captures are ignored under `test/intel-audit-2026-10-29/`. No production
+source/test, packaging, installed binary, real config/layout, driver setting,
+sysctl, udev/capability rule, or other user process was changed. The disposable
+child changed only its own dumpability and exited normally.
+
+Finding 8 remains open; no fix, installation, commit, or push. Finding 7 stays
+deferred. All previous uncommitted implementation/release work remains intact.
+Shared handoff updated; in progress nobody.
+
+
+## Finding 8: fix, validation, and installation
+
+Date: 2026-10-29 (America/Phoenix). Codex.
+User authorized fixing finding 8. Status: resolved and validated in installed
+htop-gpu 3.5.3-12. Finding 7 remains deferred; no new unresolved finding from this fix.
+
+### Versions and implementation
+
+- Source baseline remains `61c598b1a128e06864a4f071347d6ed63ce71282` plus the
+  existing uncommitted Intel implementation. Before this fix: installed 3.5.3-11.
+  New production changes are confined to `linux/IntelGPU.c`; tests extend
+  `tools/test-intel-gpu.py`. No meter formatting or public sample API changes.
+- Track known PID/starttime/FD-to-client references separately from rate history.
+  Process-stat field 22 identifies PID generations, parsing comm names containing
+  spaces/parentheses safely. Failed identity reads retain uncertain knowledge; a
+  confirmed new starttime invalidates old ownership.
+- Directory-open denial and FD-stat permission failure preserve known-client
+  uncertainty across repeated ticks. Whole-proc denial resets rate baselines
+  while retaining ownership for later scans. Missing known data makes activity
+  and empty memory unavailable instead of fabricating zero. Known allocated
+  totals from other readable clients remain approximate lower-bound data.
+- A client still readable through another owner is counted once and supplies
+  valid readings. Confirmed FD close, process exit, and PID reuse expire obsolete
+  references. Per-FD tracking prevents an unrelated denied FD in the same process
+  from retaining a closed Intel FD. Device generation/removal clears both maps.
+- Ownership is allocated only for identified Intel processes/FDs; ordinary
+  protected processes are not presumed GPU clients. References are bounded to
+  observed FD associations, with closed FDs/processes pruned after readable scans.
+
+### Regression and actual-meter validation
+
+- Stable fake `/proc/PID/stat` fixtures added; existing counter updates preserve
+  process generation. Added eight stateful groups, for 18 total. Coverage includes
+  process fdinfo-directory denial, FD-stat denial, repeated denial, recovery,
+  real exits, unrelated protected processes/FDs, shared readable aliases and
+  their loss, PID reuse, missing/malformed identity, and whole-proc recovery while
+  a known child remains inaccessible. Each scenario keeps one sampler running.
+- Fixed source: `python3 -I tools/test-intel-gpu.py --fake-only --mutations`
+  reports `ALL PASSED`: 143 passing checks including the three original deliberate
+  PCI/deduplication/capacity fault controls. ASan/UBSan clean.
+- The exact saved pre-fix source fails ten new assertions with the updated
+  fixtures, proving these tests expose the previously passing access-loss gap.
+- Normal development build and `tools/check-style.sh`: zero warnings, `STYLE OK`.
+  Source lifecycle review found no additional blocking issue in this fix.
+- Updated the sampler in a private complete sanitized htop copy with the exact
+  current feature sources and private fake roots. Six transitions in one process:
+  readable 4.00M → directory denied N/A → still denied N/A → recovered 4.00M
+  → FD-stat denied N/A → recovered 4.00M. Activity/video also show N/A during lost
+  coverage. Exit 0; no sanitizer diagnostics. This reused unchanged previously
+  sanitized modules, rather than rebuilding all modules from a clean tree.
+- Passive real-host sampler: suspended → unavailable during a transition →
+  active; active samples found 16 readable clients and 438 denied directories,
+  incomplete=false, about 184 MiB allocated, valid idle deltas after baseline.
+  The denied directories were not presumed Intel clients. No DRM device was
+  opened and no GPU workload was generated by the probe. ASan/UBSan clean.
+  Three active sanitized reads took 23.9–27.1 ms under existing system activity;
+  this short uncontrolled observation is not a performance benchmark or PM proof.
+
+### Package and installed validation
+
+- Updated the existing working-tree patch 0010 and checksum, pkgrel 12. Used a
+  private temporary Git index; real indexes/history unchanged. No commit/push.
+- `MAKEFLAGS=-j2 makepkg -fC --holdver --noconfirm`: exit 0, zero compiler
+  warnings/errors. All ten patches apply to upstream 3.5.3 and exactly reproduce
+  all 368 current source files. No package paths overlap stock htop.
+- Namcap matches the established stock-baseline hicolor-icon-theme, implicit
+  glibc, and possibly unneeded libnl diagnostics; no new diagnostics.
+- Package and installed captures using disposable real-layout copies preserve
+  the eight AMD rows followed by Intel and the user's compact heading/readouts.
+  No real config was rewritten for these checks.
+- Installed 3.5.3-12 via desktop authentication/package manager, exit 0. Installed
+  binary exactly matches the extracted package. `pacman -Qkk htop-gpu htop`: both
+  have 16 files and zero altered files. Stock htop remains 3.5.3-1.1.
+
+### Preservation, testing limits, and handoff
+
+Baseline fingerprints cover 418 project/source/tool/config/installed files. Only
+the documented sampler/test, working-tree patch/PKGBUILD, installed htop-gpu
+binary/manual, and five release/handoff docs changed. The manual differs only
+in its version header (3.5.3-11-gpu → 3.5.3-12-gpu) and exactly matches the package.
+Real htop-gpu/stock configs and
+layout, previous nine patches, other production sources/tools, and stock htop
+files are preserved. No driver, sysctl, udev/capability rule, or GPU setting changes.
+
+No new Intel/AMD/RAPL load tests were run, honoring the gaming-session constraint.
+Full unrelated config tests, isolated real PM measurement, side-by-side Mission
+Center comparison, interactive F2 behavior, and a fresh clean full sanitizer
+build were not repeated. Low-level readdir I/O errors versus clean EOF were not
+injected; this fix/test set targets the reproduced directory/stat permission
+failures and their lifecycle, not every possible procfs I/O failure.
+
+Local evidence/receipt (ignored): `test/intel-finding8-fix-2026-10-29/`.
+Finding 8 is resolved; source/test/docs/packaging remain uncommitted with previous
+work intact. No push. Shared docs updated; in progress nobody. Restart htop-gpu
+to load the fixed executable.
+
+
+## Review of the Intel iGPU work by Claude Code
+
+Date: 2026-10-29. Reviewed and committed at the user's request ("review it and commit / push if it looks good").
+Baseline: outer `b145c76` plus Codex's uncommitted Intel work, htop `61c598b1` plus the uncommitted `linux/IntelGPU*` files; installed `htop-gpu 3.5.3-12`.
+
+- Code review of `linux/IntelGPU.c` and `linux/IntelGPUMeter.c`: metadata-only device discovery (no DRM node opened), per-client deduplication, delta baselines, PID/start-time/fd ownership kept across access gaps (finding 8), suspend/rebind/access states, checked memory units, overflow guards, clock limit read every refresh. No defects found. Notes, not findings: the device ID `0x7d67` is hardcoded inline rather than in a card table; `IntelGPU_parse()` returns `int` but uses `false` for its "not this device" case.
+- Independent checks: normal build with zero warnings, `STYLE OK`, and `ALL PASSED` from `test-intel-gpu.py --mutations` (19 groups, live encode peak 33.5%, decode 18.7%, graphics 100%), `test-sampler.py`, `test-rapl.py`, `test-config-path.sh` and `test-check-style.sh`.
+- Cost: the installed binary used 2.47% of one core over 30 s with the user's layout minus the Intel meters, and 2.87% with them (1.5 s refresh), so the /proc fdinfo pass costs about 0.4% of a core.
+- Committed as htop `bb4f7331` (`linux: add Intel iGPU meters`, crediting Codex) and re-exported the series; the new patch 0010 differs from Codex's working-tree patch only in abbreviated vs full `index` blob hashes, so the installed 3.5.3-12 matches the committed code and was not rebuilt.
+- No new findings.

@@ -7,8 +7,8 @@
 
 pkgname=htop-gpu
 pkgver=3.5.3
-pkgrel=8
-pkgdesc='Interactive process viewer with AMD RX 9070 XT GPU meters, alongside stock htop'
+pkgrel=12
+pkgdesc='Interactive process viewer with AMD RX 9070 XT and Intel iGPU meters, alongside stock htop'
 arch=('x86_64')
 url='https://github.com/orlfman/htop'
 license=('GPL-2.0-or-later')
@@ -30,19 +30,21 @@ _patches=(
   0007-linux-add-Intel-CPU-package-power-meter.patch
   0008-linux-read-the-Intel-CPU-power-limit-on-every-refres.patch
   0009-linux-label-Intel-CPU-power-meter-Pwr.patch
+  0010-linux-add-Intel-iGPU-meters.patch
 )
 source=("git+https://github.com/htop-dev/htop.git#tag=${pkgver}"
         "${_patches[@]}")
 sha256sums=('a4619a140f8374c526d27cf5f892b2dceaee27b33a0446d902c35962a5159850'
-            'f8da42e98834fafbe8767cedd20f4c563a1655461375a8288d8f3aec4d7f0ec5'
-            'e493a63bae43ef6e14756d27c5a17f440d30a68f20440fbb6359999d37e5ef76'
-            '18a57804393d1a1880048a7398259a23cdd89e691e2521eda02873a679677c12'
-            '204a4b5fd726172dd328d65fa969872e6ca556897d8c057da30d392448288cdd'
-            '97645f92e58926b96c8f2749159665c293245f4b84074903202c012b693eff39'
-            '84f0944efa804ab6ea6c26c3d586f05710faab84fd43699a3d7da0a310a3f9dd'
-            '325da232ee7d07421520070a5c17b07e44965ecdbc111d6183312ee4466c10c2'
-            '19df125497808db978c2002ab7b9cd1654a09b82fde016cb5acd0e29db1bbf49'
-            'c6ca991685630959a804743ce4c4c55171807810501dcf0936fc713786aa7841')
+            '6908cfdf7580fef55c8c7dfd5504e0504580cc1262614dd6863cf86e8a7b4bfb'
+            '56afc12e5f2eef5a19f39ef9cfd66afdf8b5621dd54eb87a78affe2600b89dd0'
+            'd236472b9607f2b50641f8e463059e8e524d7af26981e18df390846d586c329d'
+            'b2db15c94057fcea21b39441e01e14d0131c761f6fbc9802fb2a57b66fc2af3c'
+            '5814ba8441f3035bafe0e74311a977690b6658a5f2e1f826fb8b409605626740'
+            '1d6e725d6230937525316a3009f6b4e4ee6f64aed7df0831b9a513035076dedc'
+            '8902394de6621adf0080981a4a6f298403d826beccaa43caf7e31d9cd7883b2c'
+            '868e4c5a2d8b758a26564866cf75cf326b73c0edbcbebd228b6d56bd082668e1'
+            'b295686879307047feda3d920827d52ca51feeb33befe19240112ad6ec1cc328'
+            '7d354519a93d9205d60af19d5d2a8a42b06c5da69e23f9de82a8be65aaf5953b')
 
 prepare() {
   cd htop

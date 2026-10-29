@@ -3,6 +3,162 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-29, Claude Code (Claude Opus 5.5): reviewed and committed the Intel iGPU work
+
+- Reviewed Codex's uncommitted Intel iGPU sampler/meters, tests, style-gate
+  and packaging changes; no defects (two minor notes in AUDIT.md).
+- All five suites `ALL PASSED`, build clean, `STYLE OK`; the Intel meters
+  cost about 0.4% of one core at the 1.5 s refresh.
+- Committed the source as htop `bb4f7331` and pushed, then re-exported the
+  patches: 0010 has the same code as Codex's working-tree patch, so the
+  installed 3.5.3-12 stays as is. Docs no longer call the work uncommitted.
+
+## 2026-10-29, Codex: fix finding 8 and install 3.5.3-12
+
+- User authorized fixing the Intel access-loss defect. Added separate known
+  PID/starttime/FD-to-client ownership in IntelGPU.c. Directory/node-stat denial
+  now keeps missing known-client data unavailable across repeated ticks and
+  whole-proc gaps. Globally readable aliases still count once; confirmed close,
+  exit, and PID reuse expire history. Unknown protected processes remain harmless.
+- Extended only `tools/test-intel-gpu.py`: stable process-stat fixtures and eight
+  new stateful groups. All 18 groups/143 checks, including three fault controls, passed
+  under ASan/UBSan; the old source fails ten new assertions. Source lifecycle
+  review found no further blocking issue in this fix.
+- Normal/style/private full sanitized checks passed, zero warnings. Six actual
+  meter transitions show memory 4.00M → N/A → 4.00M for repeated directory/stat
+  denial and recovery, with activity/video N/A during lost coverage. No sanitizer
+  diagnostics. Passive real sampling remained valid with 438 denied process
+  directories; those were not assumed Intel clients. No GPU workload or
+  driver/permission-setting change.
+- Updated patch 0010/checksum, built and installed 3.5.3-12. Ten patches exactly
+  reproduce 368 source files; package/installed display and integrity passed,
+  namcap matches stock baseline, no stock file overlap. Installed binary matches
+  the package; both real configs and compact labels/layout are unchanged.
+- Finding 8 marked resolved in AUDIT.md and shared plans. Source/tests/docs/
+  packaging remain uncommitted; no commit/push. Finding 7 and real PM/reference
+  comparison limits remain deferred/open as previously recorded. In progress
+  nobody; next: requested commit/push or further work.
+
+## 2026-10-29, Codex: audit the installed Intel iGPU work
+
+- Audited installed 3.5.3-11 and matching uncommitted Intel source on `61c598b1`,
+  including sampler, meters, tests, registration, and patch/package consistency.
+- New finding 8 (P2): if a previously detected Intel process's fdinfo directory
+  becomes inaccessible, the sampler drops its history and can publish zero
+  activity/memory with incomplete=false. Related fd-stat denial silently skips
+  the client too. This differs from its handled known-Intel fdinfo-file failure.
+- Reproduced both denial paths plus real-exit control with the exact sanitized
+  sampler. Actual sanitized htop showed memory 4.00M → 0K → 4.00M as access was
+  lost/restored. A throwaway /dev/null-only child confirmed real Linux procfs
+  readable → denied → readable transitions without opening a DRM device.
+- Existing Intel fake tests/three negative controls and style passed; normal
+  build and private complete sanitized-program update had no warnings or
+  sanitizer findings. All ten patch checksums, PKGBUILD/package fingerprint,
+  installed binary match, and installed integrity passed. Independent read-only
+  review found no additional meter/registration/package defects.
+- No GPU workload, production source/test/config/package change, installation,
+  commit, or push. Changed only AUDIT.md and these handoff docs; all prior
+  uncommitted work remains. Source-accurate private probes/evidence are ignored
+  under `test/intel-audit-2026-10-29/`. Remaining real-PM/reference checks and
+  deferred finding 7 unchanged. In progress nobody; next: fix finding 8 when
+  requested, including known-client directory/stat denial regression coverage.
+
+## 2026-10-29, Codex: simplify Intel heading
+
+- User requested just `Intel iGPU`, keeping sleep. Removed the normal
+  `visible apps`/partial suffix and trailing colon; retained `: sleep`,
+  `: no access`, and `: N/A` when appropriate. The update clears old status text
+  on recovery. Coverage remains explained in meter descriptions.
+- Only heading formatting changed in IntelGPUMeter.c; sampler/readings and both
+  real configs/layout are unchanged. Normal and updated complete sanitized builds
+  had zero warnings; style and fake Intel tests/negative controls passed.
+  Five heading transitions in one sanitized process passed without diagnostics.
+- Built/installed 3.5.3-11, updating working-tree patch 0010/checksum.
+  Ten patches exactly reproduce 368 source files. Package/installed display and
+  integrity checks passed; namcap matches stock baseline, no stock file overlap.
+  No GPU load tests added during the gaming session; prior testing limits remain.
+- AUDIT.md records results. Source/tools/docs/packaging remain uncommitted;
+  no commit/push. In progress nobody. Next: previous outstanding work or further
+  user-requested refinements.
+
+## 2026-10-29, Codex: simplify Intel clock and memory readouts
+
+- User requested the clock frequency alone and memory amount without `~` or
+  `allocated`. Changed only two format strings in `linux/IntelGPUMeter.c`:
+  `iGPU clock: 800MHz`, `iGPU mem: 4.00M`. Sources/values and descriptions remain
+  unchanged; this is a display change, with no config/layout edit.
+- Normal build and updated complete sanitized htop build: zero warnings.
+  `STYLE OK`; Intel fake/stateful tests and three negative controls `ALL PASSED`.
+  Sanitized display verified 800 MHz/4.00 MiB with the shortened readouts and no
+  diagnostics. No added GPU load or unrelated full regression run.
+- Updated working-tree patch 0010 and checksums, built and installed 3.5.3-10.
+  Ten patches exactly reproduce 368 source files; zero package build warnings,
+  namcap unchanged from stock baseline, no stock file overlap. Package/installed
+  display checks passed; installed binary matches package and both htop packages
+  report zero altered files. Both real configs and existing layout are unchanged.
+- AUDIT.md records results/limits. Source/tools/docs/packaging remain uncommitted;
+  no commit/push. In progress nobody. Next: outstanding commits/comparisons as
+  previously recorded, or further user-requested refinements.
+
+## 2026-10-29, Codex: install Intel meters and update the real layout
+
+- User authorized installing the Intel build and placing its meters below AMD.
+  Built/installed htop-gpu 3.5.3-9 with ten patches; new patch 0010 captures the
+  tested uncommitted Intel working tree on `61c598b1`. Used a temporary index;
+  no real staging, commit, or push. Commit Intel before the next commit-based
+  patch export, which would otherwise omit this working-tree patch.
+- Build had zero warnings. All ten patches exactly reproduce 368 source files.
+  Fake Intel tests/three negative controls and style passed again. Packaged
+  binary passed all 33 config-path checks and a copied-layout display capture.
+  Namcap matches stock's known diagnostics, with no stock file overlap.
+- Installed via desktop authentication after noninteractive sudo required a
+  password. Installed binary matches the package; both htop-gpu and stock htop
+  have 16 files and zero altered files. Stock version stays 3.5.3-1.1.
+- No htop was running when editing. Config backup:
+  `~/.config/htop-gpu/htop-gpurc.bak-2026-10-29_14-47-46`. Changed only the third
+  column's meter names/modes: retained eight AMD rows, then spacer, Intel heading,
+  utilization, requested clock, approximate allocated memory, combined video E/D.
+  Other settings/columns and stock config are untouched.
+- Installed capture using a disposable copy confirms that order and all four
+  Intel readings; no live GPU workload was added during the gaming session.
+  Release results and remaining PM/reference-comparison limits are in AUDIT.md.
+- Uncommitted work now also includes PKGBUILD pkgrel/description/checksums and
+  patch 0010, in addition to the preceding source/tests/docs. No new commit/push.
+  In progress nobody. Next: commit/push when requested; remaining comparisons
+  and deferred features are unchanged.
+
+## 2026-10-29, Codex: implement the four-stat Intel iGPU baseline
+
+- Committed and pushed the revised plan first, as requested: outer `b145c766`
+  (`Refine the Intel iGPU plan to the Mission Center baseline`). Then implemented
+  `linux/IntelGPU.{c,h}` and `linux/IntelGPUMeter.{c,h}` on source `61c598b1`.
+  Existing upstream files receive only registration/include lines.
+- Added visible-app utilization, requested GT0 clock, approximate allocated
+  system memory, shared video E/D, and a scope/status heading. Dynamic i915
+  discovery, Intel-only device filtering, global client deduplication, stateful
+  deltas, cache, sleep/rebind/access recovery, checked memory units, and mutable
+  clock limits are covered. No new runtime dependency or permission change.
+- Added `tools/intel-gpu-sample.c` and `tools/test-intel-gpu.py`; expanded the
+  style gate and AGENTS.md check instructions. Ten fake scenarios run state
+  transitions in one sampler, with three deliberate fault controls.
+- Fixed two development failures: raw H.264 looping was an invalid decode test
+  fixture (use a temporary MP4), and a too-tight accounting guard rejected valid
+  i915 render deltas (allow bounded 25% overshoot, retain gross-jump rejection).
+  Invalid video capacity metadata now reports unavailable instead of fallback 1.
+- Checks passed: zero-warning normal/full sanitized builds; `STYLE OK`;
+  Intel fake/live/negative-control suite (encode 32.7%, decode 18.7%, graphics
+  100%, requested clock 2000 MHz); AMD and RAPL suites; all 33 config checks;
+  all seven style-tool checks; nine whole-program stateful display stages with
+  ASan/UBSan and a final sanitized smoke test. AUDIT.md records exact limits.
+- Disposable `test/intel-igpu-preview.rc` and `.txt` show Intel below the eight
+  AMD rows. Installed 3.5.3-8, stock htop, and both user configs are unchanged.
+  No further GPU loads after the user asked about playing Dune Awakening.
+- Left uncommitted: four new nested source files plus `Makefile.am`/Platform
+  registration, two new outer test files, style-gate update, and four handoff
+  docs plus AGENTS.md. No implementation commit, patch export, package build,
+  install, or real layout change. In progress nobody. Next: review/release when
+  requested; isolated real PM and side-by-side Mission Center checks remain.
+
 ## 2026-10-29, Codex: Intel baseline narrowed to Mission Center's four stats
 
 - User selected utilization, clock speed, memory usage, and video encode/decode

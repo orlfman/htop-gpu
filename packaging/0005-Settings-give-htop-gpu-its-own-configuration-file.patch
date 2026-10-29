@@ -1,7 +1,7 @@
 From 762add8d7f73f2ad340f88854d03550bf2f92f67 Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 15:29:29 -0700
-Subject: [PATCH 5/9] Settings: give htop-gpu its own configuration file
+Subject: [PATCH 05/10] Settings: give htop-gpu its own configuration file
 
 Read and write the configuration from ~/.config/htop-gpu/htop-gpurc (or
 $XDG_CONFIG_HOME/htop-gpu/htop-gpurc) instead of stock htop's htoprc,
