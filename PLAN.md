@@ -5,8 +5,11 @@ Status (2026-10-28): steps 1–5 done. `amdgpu-meters` = `6813391d` sampler,
 `4870d3a8` video engine, `762add8d` own config file, `631bc883` fan meter; all
 pushed. htop-gpu 3.5.3-5 is installed as `htop-gpu` next to the repo `htop`, each with its own
 config (`~/.config/htop-gpu/htop-gpurc` with the GPU column, `~/.config/htop/htoprc`
-two columns). All four AUDIT.md findings are fixed; see its Resolution
-sections. Next: optional step 6 items.
+two columns). All five audit findings are fixed; findings 1-4 were
+independently re-tested, and Codex validated the finding 5 idle-clock test
+fix with zero-clock and invalid-reading regressions. See AUDIT.md.
+No package update was needed for that test-only fix. Next: optional
+step 6 items.
 
 In progress: nobody.
 
@@ -291,6 +294,9 @@ Sampler (done, `python3 -I tools/test-sampler.py`, about 30 s):
   not bound, no driver dir.
 - Cache: same or older timestamp never re-reads; a card that starts suspended
   gets its values once awake.
+- Idle GPU clock: zero, positive, then zero under one running sampler; the
+  shared live validator accepts zero and still rejects missing, negative,
+  above-peak, and invalid-peak values (audit finding 5).
 - Recovery inside ONE running sampler (added for AUDIT.md finding 2): hwmon
   missing at start then appearing, hwmon renumbered, card bound only after start,
   card unbound and rebound; each must match the full expected sample.

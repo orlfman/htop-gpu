@@ -3,6 +3,64 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Codex: fixed audit finding 5
+
+- User authorized the idle-clock test correction. `tools/test-sampler.py`
+  now uses a shared validator that accepts zero at idle while preserving
+  missing/negative/above-peak checks and the valid peak seed requirement.
+- Added a fake-sysfs 0 -> 1500 -> 0 MHz sequence under one running sampler,
+  checking complete expected samples and the actual live validator, plus
+  five invalid-value/peak guard cases. No production code changed.
+- Checks: full sampler suite `ALL PASSED` with ASan/UBSan and live encode;
+  `STYLE OK`; focused validator cases and old-comparison negative control;
+  Python syntax and `git diff --check`; full build in a disposable copy with
+  zero warnings. Existing binaries and user configs stayed unchanged.
+- Recorded the resolution in AUDIT.md and updated PLAN.md; in progress nobody.
+  Uncommitted: `tools/test-sampler.py`, `AUDIT.md`, `PLAN.md`, `CHANGELOG.md`.
+  Previous audit/trace docs preserved. No install, package rebuild, commit,
+  or push; htop source HEAD and installed package stay unchanged.
+- Next: optional step 6 work, only if wanted.
+
+## 2026-10-28, Codex: traced the zero-clock test failure
+
+- Reproduced the zero on the first sample under strace: the real `freq1_input`
+  read returned `"0\n"` successfully, and the unchanged sampler reported 0 MHz.
+  The process exited cleanly under ASan/UBSan; no parsing/unit error observed.
+- Root cause of the failure: `test-sampler.py` requires a strictly positive
+  idle sclk. Filed AUDIT.md finding 5 (P2), open; no test/source fix applied.
+- Matched GPU MP1 14.0.3 to Linux v7.3 SMU source: hwmon sclk uses the averaged
+  gfx clock, selecting the low-utilization metric at activity <= 5%.
+  The reproduced sample reported 4%. Exact GFXOFF state was not measured.
+- Separate paired hwmon/gpu_metrics reads showed differing snapshots and zero
+  averaged metrics; the driver aliases current_gfxclk to that same average.
+  Full evidence and primary-source links are in AUDIT.md.
+- Recommendation: accept nonnegative idle sclk, keep missing/negative/upper-bound
+  checks, and cover zero in fake sysfs; keep workload-specific checks separate.
+- Preserved existing uncommitted re-test docs. Uncommitted documentation remains
+  `AUDIT.md`, `PLAN.md`, `CHANGELOG.md`; source, binaries, user configs unchanged.
+- Validation: syscall trace, driver-source inspection, paired sensor reads,
+  hash checks, and `git diff --check`. No full rebuild, install, commit, or push.
+
+## 2026-10-28, Codex: independent re-test of finding 4
+
+- Baseline: outer `cfe216f9`, htop `631bc883`, installed `htop-gpu 3.5.3-5`.
+  All seven new cached-value recovery cases passed on both sampler suite runs.
+- Independent production sampler/fan display probe: missing `fan1_max` then
+  restored under one process now recovers to `Fan:1193RPM max:3200RPM` on the
+  next newer tick. Same/older ticks remain cached; ASan/UBSan clean.
+- First sampler suite run failed one live idle `sclk=0` plausibility check;
+  all other checks passed. Sixty subsequent raw sensor reads had no zero;
+  one full rerun passed. Cause unresolved; both outcomes are in AUDIT.md.
+- Both config suites passed (33 each), style regression suite passed (7),
+  `STYLE OK`, live encode passed on both runs, and all eight meters in all
+  four modes ran on the existing ASan/UBSan binary without reports.
+- Syntax, six patch checksums/exact source reproduction, installed integrity,
+  and package coexistence checks passed. Pre-report hashes: 395 checked,
+  only the deliberate PLAN.md in-progress marker changed.
+- Uncommitted documentation: `AUDIT.md`, `PLAN.md`, `CHANGELOG.md`. No source,
+  binary, or user config changes; no full rebuild, reinstall, commit, or push.
+- Next: capture raw sensor evidence if the zero-clock live check recurs.
+
 ## 2026-10-28, Claude Code (Claude Opus 5.5): fixed audit finding 4
 
 - Reproduced Codex's finding independently; the bug covered every value read

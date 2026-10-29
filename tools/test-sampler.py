@@ -177,6 +177,12 @@ def diff(got, want):
     return {k: (got.get(k), want.get(k)) for k in keys if not same(got.get(k), want.get(k))}
 
 
+def valid_idle_sclk(sample):
+    # The driver's averaged gfx clock can report zero at idle (AUDIT.md finding 5).
+    clock, peak = sample["sclk"], sample["sclkPeak"]
+    return clock is not None and peak is not None and 0 <= clock <= peak and peak >= SCLK_SEED
+
+
 # ---------- driver process ----------
 
 class Sampler:
@@ -288,6 +294,28 @@ def main():
         ]
         for name, mutate, want in cases:
             run_case(name, fake_bin, root, base, mutate, want)
+
+        print("[idle GPU clock: zero, positive, then zero under one running sampler]")
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.copytree(base, root, symlinks=True)
+        clock = f"{hw(root)}/freq1_input"
+        s = Sampler(fake_bin)
+        for ms, hz in ((100, 0), (200, 1500000000), (300, 0)):
+            write(clock, f"{hz}\n")
+            got = s.sample(ms)
+            d = diff(got, expected(root))
+            check(f"{hz} Hz sample values", not d, json.dumps(d))
+            check(f"{hz} Hz passes idle plausibility", valid_idle_sclk(got), json.dumps(got))
+        rc, err = s.close()
+        check("clean exit (ASan/UBSan)", rc == 0 and not err.strip(), err.strip()[:400])
+
+        print("[idle GPU clock: invalid readings are still rejected]")
+        for name, clock, peak in (("missing clock", None, SCLK_SEED),
+                                  ("negative clock", -1, SCLK_SEED),
+                                  ("clock above peak", SCLK_SEED + 1, SCLK_SEED),
+                                  ("missing peak", 0, None),
+                                  ("peak below seed", 0, SCLK_SEED - 1)):
+            check(name, not valid_idle_sclk({"sclk": clock, "sclkPeak": peak}))
 
         # ----- 3. cache -----
         print("[cache: same or older monotonicMs never re-reads]")
@@ -403,7 +431,7 @@ def main():
                 problems.append("power")
             if any(t is None or not 15 < t < 105 for t in x["temp"]):
                 problems.append("temp")
-            if x["sclk"] is None or not 0 < x["sclk"] <= x["sclkPeak"] or x["sclkPeak"] < SCLK_SEED:
+            if not valid_idle_sclk(x):
                 problems.append("sclk")
             if x["mclk"] is None or not 0 < x["mclk"] <= x["mclkMax"] + 1:
                 problems.append("mclk")
