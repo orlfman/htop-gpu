@@ -837,3 +837,83 @@ This was a caption/package validation, with terminal capture smoke tests rather
 than interactive F2 or pixel-level graph/LED testing.
 No new hardware support or package-discovery changes were introduced.
 PLAN.md and CHANGELOG.md record the release, and in progress is back to nobody.
+
+
+## Intel iGPU feasibility investigation
+
+Date: 2026-10-28 (America/Phoenix). Codex.
+Scope: investigate this machine and write a secondary plan for Intel stats
+below the existing RX 9070 XT meters; implementation was not requested.
+Plan: [PLAN-INTEL-IGPU.md](PLAN-INTEL-IGPU.md).
+No new production defect findings; finding 7 remains deferred.
+
+### Baseline and observations
+
+- Outer `8601dca3e9715af70a099d40b1a707ea63766e93`, htop source
+  `61c598b1a128e06864a4f071347d6ed63ce71282`; both initially clean.
+  Installed htop-gpu 3.5.3-8; shared plan listed nobody working.
+- CPU confirmed as Intel Core Ultra 7 270K Plus. Intel Graphics is PCI
+  `8086:7d67`, revision 06, at `0000:00:02.0`, bound to i915.
+  Current nodes card1/renderD128 map to it; AMD is card2/renderD129 at
+  `0000:04:00.0`. Stable by-path names are available to pin workloads.
+- Per-GT actual/requested/limit clock files exist. GT0 maximum is 2000 MHz,
+  GT1 maximum 1400 MHz. Idle samples can report 0 MHz with runtime active.
+- Readable Intel client fdinfo includes render, compute, copy, video, and
+  video-enhance busy-time counters. Video engine capacity is two.
+  Ten distinct clients were found in one inventory after identity deduplication.
+  Inaccessible/raced process directories mean access is incomplete; their
+  count is not a count of hidden GPU clients.
+- i915 PMU events exist, but an actual normal-user perf_event_open attempt
+  for rcs0-busy failed with EACCES (13). perf_event_paranoid is 2; DRM nodes
+  themselves are readable/writable by this user. No permissions were changed.
+- No Intel device hwmon directory was found. RAPL package energy is readable,
+  but core/uncore energy is not, and uncore was not verified as isolated iGPU
+  power on this platform. No usable iGPU temperature/direct-power source
+  was established. Client memory counters are not a unique global VRAM total.
+
+### Live validation
+
+A six-second 1080p60 H.264 VA-API encode was explicitly pinned to
+`/dev/dri/by-path/pci-0000:00:02.0-render`, with output discarded through the
+null muxer. It exited 0, with no error output and no generated video file.
+
+Ten snapshots showed one Intel client and 82,544 KiB resident system memory.
+From the first to last sampled interval, video busy time increased by
+1,330,747,548 ns over approximately 4.507 seconds.
+Using the reported capacity of two gives about 14.76% combined video capacity
+usage over those sampled intervals, not a render or whole-device percentage.
+Media GT1 actual clock was observed at 500 MHz; GT0 was 0 MHz in the snapshots.
+This validates live video accounting but does not test render/compute/copy/
+enhancement workloads or video decode.
+
+Runtime state was observed both suspended and active at different times.
+Activity outside the explicit workload was not isolated, so this investigation
+does not prove a passive future sampler will preserve runtime suspend.
+That is an explicit implementation acceptance test in the secondary plan.
+
+### Design conclusion and preservation
+
+The secondary plan starts with normal-user, visible-client engine activity
+and separate render/media clocks. It proposes a sixteen-row right column,
+retaining the eight AMD rows above the Intel block.
+Optional PMU access, global memory accounting, and power/temperature sensors
+remain separate work, with no fabricated readings or device-wide claims.
+Primary Linux ABI/driver/perf references are linked in the plan.
+
+Before writing the plan/report, all 403 baseline file fingerprints matched,
+including both repositories' tracked files, existing binaries, and both user
+configs. The baseline was captured after the temporary PLAN.md work marker.
+Only PLAN-INTEL-IGPU.md, PLAN.md, CHANGELOG.md, and AUDIT.md were edited.
+No production source, installed package, user config, sysctl, udev rule,
+capability, or driver binding was changed.
+Temporary probe code and downloaded primary source excerpts were used only
+for investigation. No project build/full regression suite was run for these
+documentation-only changes; validation was the hardware probes, document
+checks, fingerprint preservation, and git diff checks.
+The plan and handoff docs remain uncommitted; no push or install was performed
+for this request. In progress is back to nobody.
+
+Commit follow-up: the user subsequently authorized committing and pushing
+the secondary plan and its audit/handoff documentation.
+Those four documents are included in the planning commit; no implementation,
+package, settings, or additional hardware-test changes are included.

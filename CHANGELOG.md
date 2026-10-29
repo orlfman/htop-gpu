@@ -3,6 +3,43 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Codex: commit Intel iGPU planning documentation
+
+- User authorized committing and pushing PLAN-INTEL-IGPU.md and the related
+  PLAN.md, AUDIT.md, and CHANGELOG.md investigation/handoff updates.
+- Checked document links, staged whitespace, and the unchanged source tree.
+  No new hardware tests or builds were needed for this documentation commit.
+- Implementation has not started; installed htop-gpu stays at 3.5.3-8.
+  In progress nobody; no implementation work included in this commit.
+
+## 2026-10-28, Codex: Intel iGPU investigation and secondary plan
+
+- User requested a separate plan for the 270K Plus iGPU below the RX 9070 XT
+  stats. Added PLAN-INTEL-IGPU.md and linked it from PLAN.md; no implementation.
+- Confirmed actual CPU model and Intel Graphics PCI `8086:7d67` at
+  `0000:00:02.0`, bound to i915. Render/media GT clock files and five engine
+  classes are present. Current DRM nodes are discovered observations only.
+- Normal-user PMU probe returned EACCES (perf_event_paranoid=2), while Intel
+  client fdinfo counters and render-node access work. Recommended first
+  backend: visible-app counters plus sysfs clocks, with accurate scope labels;
+  device-wide PMU support remains optional pending a separate access decision.
+- Pinned six-second Intel H.264 VA-API encode exited 0 without media files.
+  Video accounting advanced by 1.331 seconds over 4.507 seconds sampled,
+  about 14.76% across two video engines. Media GT clock reached 500 MHz;
+  sampled render clock stayed 0. Resident client memory was 82,544 KiB.
+- Proposed right-column block totals sixteen rows including the existing
+  eight AMD rows, a spacer/heading, five Intel engine bars, and a clock line.
+  Power/temperature/fan/global-memory bars are deferred for lack of validated
+  sources or accounting. The plan includes staged implementation, recovery,
+  normalization/deduplication tests, runtime-PM limits, and primary sources.
+- AUDIT.md records investigation results and limits. Only docs changed;
+  source, binaries, packages, settings, permissions, and drivers unchanged.
+  No build, full regression run, commit, push, or install for this planning
+  request. Checks: live capability probes, document checks, preserved hashes,
+  and git diff checks. Finding 7 remains deferred; in progress nobody.
+- Uncommitted: PLAN-INTEL-IGPU.md, PLAN.md, CHANGELOG.md, AUDIT.md.
+  Next: implement the secondary plan only when requested.
+
 ## 2026-10-28, Codex: CPU caption Pwr, package 3.5.3-8 installed
 
 - Re-read the shared docs, upstream instructions/style guide, and current

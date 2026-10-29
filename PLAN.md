@@ -11,7 +11,9 @@ independently re-tested, and Codex validated the finding 5 idle-clock test
 fix with zero-clock and invalid-reading regressions. See AUDIT.md.
 Intel PL1 staleness (finding 6) is fixed in `6c06d243`, first installed in
 3.5.3-7 and retained in 3.5.3-8; finding 7 (P3, later CPU packages) is deferred at the user's
-request. Next: optional step 6 items.
+request. Secondary plan ready: [Intel iGPU below the AMD meters](PLAN-INTEL-IGPU.md),
+based on the 270K Plus hardware investigation. Implementation has not started.
+Next: that plan or other optional step 6 items when requested.
 
 In progress: nobody.
 
@@ -211,6 +213,7 @@ htop-gpu/                    git repo (ignores src/, test/, makepkg output)
   CLAUDE.md                  imports AGENTS.md for Claude Code
   CHANGELOG.md               one entry per agent session, newest first
   PLAN.md
+  PLAN-INTEL-IGPU.md         separate Intel iGPU feasibility/design/validation plan
   packaging/
     PKGBUILD                 Arch's htop PKGBUILD + our patches
     000N-*.patch             exported from src/htop with git format-patch
