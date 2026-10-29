@@ -13,9 +13,12 @@ Intel PL1 staleness (finding 6) is fixed in `6c06d243`, first installed in
 3.5.3-7 and retained in 3.5.3-8; finding 7 (P3, later CPU packages) is deferred at the user's
 request. Secondary plan ready: [Intel iGPU below the AMD meters](PLAN-INTEL-IGPU.md),
 based on the 270K Plus hardware investigation. Implementation has not started.
+Baseline refined on 2026-10-29: utilization, clock, memory usage, and shared
+video encode/decode, using Mission Center as the reference; extra engine rows
+are deferred. Memory usage is included in the first version.
 Next: that plan or other optional step 6 items when requested.
 
-In progress: nobody.
+In progress: Codex, commit revised plan, then implement the Intel iGPU baseline.
 
 GitHub (both private): https://github.com/orlfman/htop-gpu (this folder) and
 https://github.com/orlfman/htop (branch `amdgpu-meters`).

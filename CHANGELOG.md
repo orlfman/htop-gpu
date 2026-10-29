@@ -3,6 +3,31 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-29, Codex: Intel baseline narrowed to Mission Center's four stats
+
+- User selected utilization, clock speed, memory usage, and video encode/decode
+  as the initial Intel baseline, and explicitly requested a plan update first.
+  Revised PLAN-INTEL-IGPU.md to four stats below the AMD block (fourteen rows
+  total in that column); separate compute/copy/enhancement bars move to later.
+- Inspected installed Mission Center 1.2.0-1.1 and its official v1.2.0 source,
+  pinned Magpie backend, and pinned NVTOP revision. Intel video is shared E/D;
+  the clock source is requested frequency, and memory can fall back to visible
+  client allocated bytes. The plan now defines those source/summary semantics
+  and distinguishes reference-style activity indexes from whole-device busy.
+- Memory is in the initial baseline, not deferred. A normal-user i915 memory
+  query succeeded with one system region (66,628,472,832 bytes), but equal
+  probed/unallocated fields do not establish zero usage. Nine visible clients
+  reported 218,872 KiB allocated and 24,584 KiB shared in a snapshot; shared
+  bytes are a category, not an extra total. Proposed default: approximate
+  allocated-memory text, with no invented dedicated-VRAM capacity.
+- AUDIT.md records source versions, probes, revised scope, and limits.
+  No production code, user layout, package, permission, or installed app was
+  changed. No application was launched or GPU workload run in this refinement.
+- Checks: document links/fences, diff whitespace, and protected-file hashes.
+  No build/full regression suite for documentation-only edits. In progress
+  nobody; uncommitted PLAN-INTEL-IGPU.md, PLAN.md, CHANGELOG.md, AUDIT.md.
+  No commit, push, or install. Next: review the revised baseline before implementation.
+
 ## 2026-10-28, Codex: commit Intel iGPU planning documentation
 
 - User authorized committing and pushing PLAN-INTEL-IGPU.md and the related

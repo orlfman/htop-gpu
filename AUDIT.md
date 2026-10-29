@@ -917,3 +917,77 @@ Commit follow-up: the user subsequently authorized committing and pushing
 the secondary plan and its audit/handoff documentation.
 Those four documents are included in the planning commit; no implementation,
 package, settings, or additional hardware-test changes are included.
+
+
+## Intel baseline refined against Mission Center
+
+Date: 2026-10-29 (America/Phoenix). Codex.
+User selected utilization, clock speed, memory usage, and video encode/decode
+as the first Intel iGPU baseline, then explicitly requested a plan update
+before implementation. No new production defect finding; finding 7 stays deferred.
+
+### Source and package versions inspected
+
+- Project baseline: outer `51c64de5305ece34a6d67c3fcced9c1d78bf4e11`, source
+  `61c598b1a128e06864a4f071347d6ed63ce71282`; both initially clean.
+- Installed Mission Center: `1.2.0-1.1`. Its binaries have no file capabilities
+  in this installation. The application/backend were not launched for this work.
+- Official Mission Center `v1.2.0`: `193e3729367035cf184da004c3246efe79d5c53e`.
+  Pinned Magpie: `a5272b3c1d853caa4044b737cf49257bfc4c86f2`.
+  Pinned NVTOP: `3d4a953da02bc18886734613bb9f60ff80669de7`.
+  Primary source links and relevant semantics are in PLAN-INTEL-IGPU.md.
+
+The reference's Intel path marks video encode/decode shared and takes both
+internal video rates from the same counter. The UI presents the shared case
+as video encode/decode. It uses requested frequency for the clock reading,
+and can estimate memory from per-client allocated bytes rather than resident
+bytes when direct used/free data is unavailable.
+Its utilization summary is a visible-client render/compute work proxy,
+and display saturation does not make it a whole-device busy-time measurement.
+The revised plan specifies these distinctions and an explicit video denominator
+convention, rather than copying UI field names while changing their meaning.
+
+### Additional normal-user memory checks
+
+An informational DRM_IOCTL_I915_QUERY on the Intel render node succeeded
+without changing permissions or settings. It reported one system region:
+
+- Probed bytes: 66,628,472,832.
+- Unallocated field: 66,628,472,832.
+
+The equal fields are not evidence of zero graphics allocation: a useful
+unallocated value can be withheld without elevated monitoring access.
+A separate client snapshot deduplicated nine readable Intel clients:
+
+- Allocated system memory: 218,872 KiB (about 213.7 MiB).
+- Resident system memory: 218,872 KiB in this snapshot; this need not always
+  equal allocated memory.
+- Shared category: 24,584 KiB, already within the allocation, not extra bytes
+  to add to it.
+- Stolen-local allocation: 0 in the readable entries.
+
+Runtime state was active before and after the query/inventory.
+No new encode/decode/render workload was run and no Mission Center UI values
+were captured side by side. Source tracing and a capability query do not
+establish exact numeric parity with the user's application display.
+
+### Plan revision and preservation
+
+The first block now has four stats: utilization, requested clock, approximate
+visible-client memory allocation, and combined video encode/decode.
+It follows the existing eight AMD rows, with a spacer/heading, for fourteen
+right-column rows at the proposed defaults. Extra engine bars and actual/
+media-clock details move to later work; memory usage is explicitly included now.
+An exact global memory percentage, isolated power, temperature, and a separate
+encode-versus-decode split are not fabricated from the available counters.
+
+Updated PLAN-INTEL-IGPU.md, PLAN.md, CHANGELOG.md, and this audit entry only.
+Production source, binaries, installed packages, app settings, user layouts,
+permissions, capabilities, and driver bindings were preserved.
+Temporary official-source clones and a small memory-query probe were used
+only for investigation; none were built into the project.
+Validation: source/package inspection, the memory query/client snapshot,
+document-link/fence checks, whitespace checks, and protected-file hashes.
+No project build or full regression suite was run for these documentation edits.
+The four docs remain uncommitted; no push or installation was performed.
+In progress is back to nobody; implementation has not started.
