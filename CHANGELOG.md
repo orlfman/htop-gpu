@@ -3,6 +3,40 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Claude Code (Claude Opus 5.5): fixed audit finding 4
+
+- Reproduced Codex's finding independently; the bug covered every value read
+  once (VRAM total, mclk levels, temp limits, temp/clock labels, `fan1_max`),
+  not only the fan. Fix: one-time reads count as done only when all are
+  present (`AMDGPU_staticComplete()`), retried each refresh until then.
+- 7 new recovery cases in `test-sampler.py` (remove + restore under one running
+  sampler), all failing before the fix; display recovery shown on a fake card
+  inside one htop process. `expected()` now tolerates a missing `pp_dpm_mclk`.
+- Squashed into the sampler and fan commits (user's choice), force-pushed with
+  lease. Old → new: `50714d79`→`6813391d`, `75dce070`→`7171bb46`,
+  `0f0243a9`→`0b54b642`, `e4d2444b`→`4870d3a8`, `8717c760`→`762add8d`,
+  `546413b7`→`631bc883`. Same final tree; each commit builds, 0 warnings.
+- Package 3.5.3-5. All suites pass, ASan + UBSan clean, namcap as stock.
+  Resolution recorded in AUDIT.md (per the AGENTS.md audit rule).
+- Committed Codex's uncommitted fan-audit docs (AUDIT.md section, AGENTS.md
+  audit rule, CHANGELOG/PLAN entries) together with this.
+
+## 2026-10-28, Codex: fan audit findings recorded
+
+- Added the fan RPM audit to `AUDIT.md`, including one open P2: a failed first
+  `fan1_max` read stays cached and hides valid RPM after the file recovers.
+  Reproduced under one running sampler/display probe with ASan + UBSan.
+- Recorded passing sampler/live checks, 33 installed config checks, style,
+  production fan state probes, all four live fan modes, patch/package integrity,
+  and 395 unchanged file hashes. Physical spinning fan remains unverified.
+- User's standing instruction: every future audit/re-test is recorded in
+  `AUDIT.md`; added that rule to `AGENTS.md`. PLAN.md now lists the open issue.
+- Documentation only. Uncommitted: `AUDIT.md`, `AGENTS.md`, `PLAN.md`, and
+  `CHANGELOG.md`. No source/config changes, rebuild, install, commit, or push.
+- Validation for this documentation update: content checks and `git diff --check`;
+  test results above come from the completed audit and were not rerun for prose.
+- Next: fix the fan maximum recovery issue when authorized; see `AUDIT.md`.
+
 ## 2026-10-28, Claude Code (Claude Opus 5.5): fan meter
 
 - **User's request:** fan speed, aware of the card's zero RPM mode.

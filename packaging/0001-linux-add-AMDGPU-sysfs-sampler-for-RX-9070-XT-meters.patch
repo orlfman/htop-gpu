@@ -1,4 +1,4 @@
-From 50714d790bd40213a12228eb737c5659b6cd58bd Mon Sep 17 00:00:00 2001
+From 6813391d8ae691e6aa8383a0da58ae4f6bf79556 Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 14:08:49 -0700
 Subject: [PATCH 1/6] linux: add AMDGPU sysfs sampler for RX 9070 XT meters
@@ -21,7 +21,10 @@ is looked for on every refresh, a card that is no longer bound to
 amdgpu is forgotten and looked for again, and the hwmon directory is
 searched until it exists and again whenever it goes away (e.g. when it
 is renumbered). The meters thus recover when amdgpu binds the card or
-re-registers hwmon after htop started.
+re-registers hwmon after htop started. The values read only once (VRAM
+total, memory clock levels, temperature limits, sensor labels) only
+count as read when all of them are there, so one that failed to read
+is tried again on the next refresh.
 
 AMDGPU_SYSFS_ROOT allows pointing the sampler at a fake sysfs tree for
 testing; htop itself always uses /sys.
@@ -29,9 +32,9 @@ testing; htop itself always uses /sys.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  Makefile.am    |   2 +
- linux/AMDGPU.c | 361 +++++++++++++++++++++++++++++++++++++++++++++++++
+ linux/AMDGPU.c | 373 +++++++++++++++++++++++++++++++++++++++++++++++++
  linux/AMDGPU.h |  64 +++++++++
- 3 files changed, 427 insertions(+)
+ 3 files changed, 439 insertions(+)
  create mode 100644 linux/AMDGPU.c
  create mode 100644 linux/AMDGPU.h
 
@@ -57,10 +60,10 @@ index 115a07e8..7a151202 100644
  	linux/GPU.c \
 diff --git a/linux/AMDGPU.c b/linux/AMDGPU.c
 new file mode 100644
-index 00000000..150fc6e6
+index 00000000..2eae0b05
 --- /dev/null
 +++ b/linux/AMDGPU.c
-@@ -0,0 +1,361 @@
+@@ -0,0 +1,373 @@
 +/*
 +htop - linux/AMDGPU.c
 +(C) 2026 orlfman
@@ -338,6 +341,18 @@ index 00000000..150fc6e6
 +   sample.sclkPeak = sample.card->sclkSeed;
 +}
 +
++/* The values read once only count as read when all of them are there; a failed one is tried again */
++static bool AMDGPU_staticComplete(void) {
++   if (isNaN(sample.vramTotal) || isNaN(sample.mclkMax) || !sclkIndex || !mclkIndex)
++      return false;
++
++   for (size_t i = 0; i < AMDGPU_TEMP_COUNT; i++) {
++      if (!tempIndex[i] || isNaN(sample.tempCrit[i]))
++         return false;
++   }
++   return true;
++}
++
 +/* Values that do not change while the card is up, read once it is known to be awake.
 +   Returns false while there is no hwmon directory, so the next refresh tries again. */
 +static bool AMDGPU_readStatic(void) {
@@ -381,7 +396,7 @@ index 00000000..150fc6e6
 +   if (staticRead && access(hwmonDir, F_OK) != 0)
 +      staticRead = false;
 +   if (!staticRead)
-+      staticRead = AMDGPU_readStatic();
++      staticRead = AMDGPU_readStatic() && AMDGPU_staticComplete();
 +
 +   sample.gpuBusy = AMDGPU_readNumber(deviceDir, "gpu_busy_percent");
 +   sample.memBusy = AMDGPU_readNumber(deviceDir, "mem_busy_percent");

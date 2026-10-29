@@ -1,12 +1,12 @@
 # htop-gpu: plan
 
-Status (2026-10-28): steps 1–5 done. `amdgpu-meters` = `50714d79` sampler,
-`75dce070` GPU usage / VRAM / power, `0f0243a9` temperatures and clocks,
-`e4d2444b` video engine, `8717c760` own config file, `546413b7` fan meter; all
-pushed. htop-gpu 3.5.3-4 is installed as `htop-gpu` next to the repo `htop`, each with its own
+Status (2026-10-28): steps 1–5 done. `amdgpu-meters` = `6813391d` sampler,
+`7171bb46` GPU usage / VRAM / power, `0b54b642` temperatures and clocks,
+`4870d3a8` video engine, `762add8d` own config file, `631bc883` fan meter; all
+pushed. htop-gpu 3.5.3-5 is installed as `htop-gpu` next to the repo `htop`, each with its own
 config (`~/.config/htop-gpu/htop-gpurc` with the GPU column, `~/.config/htop/htoprc`
-two columns). Codex's `AUDIT.md` findings (3) are fixed, see its Resolution
-section. Next: step 6 items, only if wanted.
+two columns). All four AUDIT.md findings are fixed; see its Resolution
+sections. Next: optional step 6 items.
 
 In progress: nobody.
 
@@ -241,7 +241,7 @@ Package:
   Name/Icon/Exec changed, `htop-gpu` icons) and fails if a file named like stock
   htop's is left over. No `provides`/`conflicts`. `3.5.3-1` replaced htop
   instead.
-- Own config: commit `8717c760` makes htop-gpu read
+- Own config: commit `762add8d` makes htop-gpu read
   `~/.config/htop-gpu/htop-gpurc` (`$XDG_CONFIG_HOME/htop-gpu/htop-gpurc`).
   Without one yet it starts from stock htop's `~/.config/htop/htoprc`, then
   `~/.htoprc`, and saves that as its own. Stock files are only read, never
@@ -323,17 +323,17 @@ Meters (steps 2 to 4):
    commit (`linux: add AMDGPU sysfs sampler for RX 9070 XT meters`). Dev build: `./configure --prefix=/usr --sysconfdir=/etc
    --enable-affinity --enable-capabilities --enable-delayacct --enable-sensors
    --enable-unicode --enable-debug && make`.
-2. ~~GPU usage, VRAM, power meters.~~ Done 2026-10-28, commit `75dce070`: `linux/AMDGPUMeter.{c,h}`
+2. ~~GPU usage, VRAM, power meters.~~ Done 2026-10-28, commit `7171bb46`: `linux/AMDGPUMeter.{c,h}`
    (3 classes, modeled on `SwapMeter.c`, upstream colors `GPU_ENGINE_1`,
    `MEMORY_1`, `BATTERY`), registered after `GPUMeter_class` in
    `linux/Platform.c`. Checked live in all 4 modes against sysfs (idle and under a
    VA-API encode load) and on fake trees (`sleep`, partial `N/A`, card missing).
-3. ~~Temps and both clock meters.~~ Done 2026-10-28, commit `0f0243a9`:
+3. ~~Temps and both clock meters.~~ Done 2026-10-28, commit `0b54b642`:
    `AMDGPUTemp`, `AMDGPUClock`, `AMDGPUMemClock` added to `linux/AMDGPUMeter.c`
    and registered after the step 2 meters. Checked live in all 4 modes, in °F,
    idle and under load against sysfs, colors with `tools/htop-capture.py` on fake
    hot temps, and `sleep` / partial `N/A` / missing card on fake trees.
-4. ~~Video engine meter.~~ Done 2026-10-28, commit `e4d2444b`: `AMDGPUVideo`
+4. ~~Video engine meter.~~ Done 2026-10-28, commit `4870d3a8`: `AMDGPUVideo`
    (`VCN`, bar by default, `GPU_ENGINE_4` color). Live: matches sysfs idle
    (0%, 25/25 MHz), during an encode (99%, 2933/2200 MHz) and a decode (100%
    while GPU usage read 5%). Fake: `sleep`, unknown `gpu_metrics` revision →
@@ -347,14 +347,14 @@ Meters (steps 2 to 4):
    removed, captions kept. Previous htoprc saved as
    `~/.config/htop/htoprc.bak-2026-10-28`.
    Then (user's request, same day): own config file and side by side. Commit
-   `8717c760` (`Settings: give htop-gpu its own configuration file`) and
+   `762add8d` (`Settings: give htop-gpu its own configuration file`) and
    htop-gpu `3.5.3-2` installed as `htop-gpu` next to the repo `htop`. The GPU
    layout moved to `~/.config/htop-gpu/htop-gpurc`, and stock `htoprc` went back
    to the two-column backup. Checked with `tools/test-config-path.sh` (16
    checks; the unpatched build fails 7 of them, including deleting
    `~/.htoprc`).
 6. Later, if wanted: video engine process list, GTT in the VRAM meter, other
-   cards. ~~Fan RPM~~ done 2026-10-28, commit `546413b7`: `AMDGPUFan` (row 8),
+   cards. ~~Fan RPM~~ done 2026-10-28, commit `631bc883`: `AMDGPUFan` (row 8),
    added after VCN in the user's htop-gpu column. Zero RPM mode shows as
    `stopped`; the temperature where the fan starts is only exposed with
    overdrive enabled (`gpu_od/fan_ctrl`), which stays off.

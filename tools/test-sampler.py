@@ -105,8 +105,11 @@ def expected(root, pci=PCI):
             return None
         return scaled(f"{hw}/{kind}{idx[label]}_{item}", div)
 
-    mclk_levels = [float(line.split(":")[1].strip().split("M")[0])
-                   for line in open(f"{dev}/pp_dpm_mclk") if ":" in line]
+    try:
+        mclk_levels = [float(line.split(":")[1].strip().split("M")[0])
+                       for line in open(f"{dev}/pp_dpm_mclk") if ":" in line]
+    except OSError:
+        mclk_levels = []
     vram_total = scaled(f"{dev}/mem_info_vram_total", 1024)
     e = {
         "status": "active", "card": "RX 9070 XT", "pci": pci,
@@ -359,6 +362,25 @@ def main():
         recovery("card bound only after start", unbind, rebind, lambda r: not_found())
         recovery("card unbound while running, then bound again", None, unbind, expected,
                  after=rebind, want_after=lambda r: not_found())
+
+        # Each value read only once must be read again if it failed at first (AUDIT.md finding 4)
+        def hide(rel):
+            def f(r):
+                path = glob.glob(f"{dev(r)}/{rel}")[0]
+                os.rename(path, f"{r}/hidden")
+                open(f"{r}/hidden.path", "w").write(path)
+            return f
+
+        def unhide(r):
+            os.rename(f"{r}/hidden", open(f"{r}/hidden.path").read())
+
+        def fan_spinning(r):
+            write(f"{hw(r)}/fan1_input", "1193\n")
+
+        for rel in ("hwmon/*/fan1_max", "mem_info_vram_total", "pp_dpm_mclk", "hwmon/*/temp2_crit",
+                    "hwmon/*/temp3_label", "hwmon/*/freq1_label", "hwmon/*/freq2_label"):
+            recovery(f"{rel} missing at start, appears later",
+                     lambda r, rel=rel: (fan_spinning(r), hide(rel)(r)), unhide, expected)
 
         # ----- 4. live -----
         print("[live /sys: idle plausibility]")

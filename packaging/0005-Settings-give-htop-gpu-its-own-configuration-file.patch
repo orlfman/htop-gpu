@@ -1,4 +1,4 @@
-From 8717c760aea42110b7c2326f186268998df90413 Mon Sep 17 00:00:00 2001
+From 762add8d7f73f2ad340f88854d03550bf2f92f67 Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 15:29:29 -0700
 Subject: [PATCH 5/6] Settings: give htop-gpu its own configuration file

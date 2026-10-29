@@ -46,6 +46,10 @@ Only one agent works on the project at a time.
 
 ## Rules
 
+- After every audit or re-test, record the results in `AUDIT.md` without
+  waiting for a separate request. Include findings (or explicitly none),
+  the audited version, validation results, and testing limits. This is the
+  user's standing instruction from 2026-10-28.
 - Follow upstream htop's style guide and `src/htop/AGENTS.md`. The only exception:
   no `Signed-off-by:` trailer.
 - Keep upstream files nearly untouched. New code goes in new files; existing files

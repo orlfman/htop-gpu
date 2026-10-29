@@ -2,8 +2,8 @@
 
 Date: 2026-10-28 (America/Phoenix).
 Auditor: Codex.
-Status: all three original findings fixed by Claude and independently re-tested by Codex; see Resolution and Independent re-test below.
-All three are P2 (normal priority).
+Status: all four findings are fixed (see the Resolution sections); the first three were independently re-tested by Codex.
+All findings are P2 (normal priority).
 
 ## Scope and baseline
 
@@ -198,3 +198,102 @@ All temporary test artifacts were outside the project and cleaned up by the test
 No full htop/package rebuild, reinstall, new whole-htop sanitizer run, or interactive game/VRAM-load check was performed.
 No source, package, user config, or project documentation files were changed during the re-test.
 This section and the audit status above were updated afterward at the user's request; the re-test did not commit or push anything.
+
+
+## Fan RPM audit by Codex
+
+Date: 2026-10-28 (America/Phoenix).
+Scope: the fan RPM feature and its sampler, display, tests, and packaging changes.
+Result: one new P2 finding, open; no fixes applied.
+The three earlier findings remain resolved.
+
+### Audited baseline
+
+- Outer repository: `7513b0caf1e320ec26b1316d15a6e2fde49ab8b1`.
+- htop source repository: `546413b78d0f298ae895053c1bc60d7f3dc00965` (`linux: add AMD GPU fan meter`).
+- Installed package: `htop-gpu 3.5.3-4`, alongside stock `htop 3.5.3-1.1`.
+- Read the current agent instructions, plan, changelog, feature diff, upstream rules, and affected tests.
+- Both repositories were clean before and after the audit.
+
+### 4. [P2] Failed initial fan maximum read leaves valid RPM stuck at N/A
+
+Locations at this baseline: `src/htop/linux/AMDGPU.c:302-303` and `src/htop/linux/AMDGPUMeter.c:308-311`.
+
+`AMDGPU_readStatic()` returns success after finding hwmon even when reading `fan1_max` fails.
+The cached `fanMax` therefore remains NaN, and subsequent refreshes do not retry it while the same hwmon directory exists.
+The fan meter requires a valid maximum as well as valid RPM, so it displays `N/A` even when `fan1_input` continues to report a valid speed.
+Restoring the maximum file does not recover the display; restarting htop or forcing hwmon rediscovery does.
+
+#### Reproduction
+
+A temporary probe compiled the production sampler and fan meter update/display callbacks with ASan and UBSan.
+Only unused UI lifecycle callbacks and an unrelated meter helper were stubbed; the fan sampling and display logic were unchanged.
+All file changes below were made in a disposable fake sysfs tree, with one probe process kept running throughout.
+
+1. Keep the hwmon directory present and set `fan1_input` to `1193`, but remove `fan1_max` before the first sample.
+2. Sample at timestamp 100: the sampler is active and reads 1193 RPM, but `fanMax` is unavailable and both fan display buffers show `N/A`.
+3. Restore `fan1_max` with `3200` and sample at newer timestamps 200 and 300.
+   Both still have an unavailable cached maximum and display `N/A`.
+4. Rename the hwmon directory to a different `hwmonN` number and sample at timestamp 400.
+   Rediscovery reads the maximum and the fan display recovers.
+
+| State | RPM sampled | Maximum sampled | Bar text | Text display, including caption |
+| --- | --- | --- | --- | --- |
+| First sample, maximum missing | 1193 | unavailable | `N/A` | `Fan:N/A` |
+| Maximum restored to 3200; next two samples | 1193 | still unavailable | `N/A` | `Fan:N/A` |
+| After hwmon rediscovery | 1193 | 3200 | `1193RPM` | `Fan:1193RPM max:3200RPM` |
+
+The reproduction exited cleanly with no ASan or UBSan findings.
+The existing `fan1_max missing` test in `tools/test-sampler.py:276` only checks a fresh process with the file missing; it does not restore the file within that process or check the fan meter's display.
+
+#### Suggested correction and regression coverage
+
+Retry a failed maximum read instead of caching the failure for the entire session.
+Preserve the suspended-card guard and shared per-tick cache.
+Add a regression test that removes and restores `fan1_max` under one running sampler and verifies that the fan display recovers.
+Consider keeping valid RPM visible in text mode when only the maximum is unavailable.
+
+### Checks that passed
+
+- `tools/check-style.sh`: `STYLE OK`.
+- `python3 -I tools/test-sampler.py`: `ALL PASSED`, including the new fan cases, existing recovery/cache/suspend cases, live sampling, and VA-API encode under ASan/UBSan.
+  Video-engine busy reached 100%, with vclk/dclk peaks of 2933/2200 MHz.
+- `tools/test-config-path.sh /usr/bin/htop-gpu`: all 33 checks passed.
+- Independent production fan callback probe: spinning (1193 RPM), stopped (0 RPM), missing input, restored input (1800 RPM), garbage input, suspended/awake, and unbound/rebound states all behaved as expected, with no ASan/UBSan reports.
+- All four fan modes were exercised live using temporary configs with the installed binary and the existing `test/htop-asan` build.
+  Both captures succeeded; the sanitizer build produced no reports.
+  Live sysfs reported `fan1_input=0` and `fan1_max=3200`; the displayed stopped state agreed.
+- Python parsing, shell/PKGBUILD syntax, warning-strict C syntax, and Git whitespace checks passed.
+- All six packaged patch checksums matched `packaging/PKGBUILD`.
+- Applying the six patches sequentially to temporary upstream `3.5.3` files reproduced all eight changed source files byte for byte.
+- Installed stock htop and htop-gpu shared no files, excluding shared directories.
+- `pacman -Qkk htop-gpu`: 16 total files, zero altered files.
+- Before/after SHA-256 comparisons verified 395 files unchanged, including tracked project/source files, tested binaries, and both user configs.
+
+### Scope and limits
+
+The physical fan was stopped during live checks; spinning behavior was tested with simulated sysfs readings, not measured on a physically spinning fan.
+The audit used existing htop binaries and temporary probe/sampler builds; it did not rebuild or reinstall htop-gpu, change fan controls, or change user configs.
+No project files were changed during the audit.
+This entry, the audit status, and the related project documentation were updated afterward at the user's request.
+
+### Ongoing audit reporting
+
+User instruction, 2026-10-28: record all future audit and re-test results in this file automatically, including audits with no findings.
+The same requirement is recorded in `AGENTS.md` so subsequent agents can follow it.
+
+## Resolution of finding 4
+
+Date: 2026-10-28. Fixed by Claude Code (Claude Opus 5.5), at the user's request.
+Reproduced independently first (one running sampler: `fan1_max` missing, then restored, stayed unavailable).
+The cause was wider than the fan: every value read once (VRAM total, `pp_dpm_mclk` levels, temperature limits, the temperature and clock labels, `fan1_max`) was cached as missing for the session if its first read failed, because the one-time reads counted as done as soon as hwmon was found.
+
+- Fix: the one-time reads only count as done when all of those values are present (`AMDGPU_staticComplete()`); until then they are tried again on every refresh. The runtime-suspend guard and the shared per-tick cache are unchanged.
+  Squashed into the commits it belongs to (the user's choice): the general check into the sampler commit, the `fan1_max` part into the fan commit; `amdgpu-meters` force-pushed with lease.
+  New hashes: `6813391d` sampler, `7171bb46` usage / VRAM / power, `0b54b642` temperatures and clocks, `4870d3a8` video engine, `762add8d` own config, `631bc883` fan meter (old `50714d79`, `75dce070`, `0f0243a9`, `e4d2444b`, `8717c760`, `546413b7`).
+  The final tree equals the pre-squash tip; each commit builds on its own with zero warnings.
+- Regression tests: `tools/test-sampler.py` removes and restores each of `fan1_max`, `mem_info_vram_total`, `pp_dpm_mclk`, `temp2_crit`, `temp3_label`, `freq1_label` and `freq2_label` under one running sampler; all seven failed on the audited code and pass now.
+  The fan display was also shown to recover inside one running htop-gpu on a fake card: `Fan:N/A` while `fan1_max` was missing, `Fan:1193RPM max:3200RPM` after it was restored.
+- Not adopted: showing the RPM in text mode while only the maximum is missing. VRAM and power already show `N/A` without their totals, and the retry removes the cause.
+- Checks: build clean, `STYLE OK`, sampler / config-path / style-check suites `ALL PASSED`, ASan + UBSan htop with all meters and the fan meter produced no reports, namcap matches stock.
+  Installed as `htop-gpu 3.5.3-5`.
