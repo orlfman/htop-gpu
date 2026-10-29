@@ -3,6 +3,26 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-10-28, Claude Code (Claude Opus 5.5): Intel CPU power meter
+
+- **User's request:** CPU power, Intel only for now; the user's udev rule
+  (`99-rapl-read.rules`) makes the `intel-rapl:0` package counter readable.
+- **`src/htop` commit `363370bd`** (`linux: add Intel CPU package power
+  meter`): new `linux/IntelRAPL.{c,h}` sampler + `linux/IntelRAPLMeter.{c,h}`.
+  Package power = energy delta / time between refreshes (none on the first),
+  wrap-around at `max_energy_range_uj`, all `intel-rapl:N` packages summed,
+  subzones and `intel-rapl-mmio` copies skipped, bar against the long term
+  (PL1) limit, `no access` when the counter is root-only. Built in the audit
+  lessons: discovery retried, limits retried until read, one read per refresh.
+- **Tests:** new `tools/test-rapl.py` + `tools/rapl-sample.c` (ASan/UBSan):
+  deltas, cache, wrap, two packages, no access → readable, counters
+  appearing/disappearing, limit appearing later, garbage, all under one running
+  sampler; live idle 9.2 W, all CPUs busy 127.8 W. Two injected bugs (wrap,
+  access check) were caught. Meter checked in all 4 modes on the ASan htop.
+- **Package 3.5.3-6** (7 patches), installed (user typed sudo). Placed under
+  Swap in the htop-gpu left column, caption `CPU` (user's choices).
+- **Checks:** build clean, `STYLE OK`, all suites `ALL PASSED`.
+
 ## 2026-10-28, Codex: fixed audit finding 5
 
 - User authorized the idle-clock test correction. `tools/test-sampler.py`

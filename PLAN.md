@@ -2,8 +2,8 @@
 
 Status (2026-10-28): steps 1–5 done. `amdgpu-meters` = `6813391d` sampler,
 `7171bb46` GPU usage / VRAM / power, `0b54b642` temperatures and clocks,
-`4870d3a8` video engine, `762add8d` own config file, `631bc883` fan meter; all
-pushed. htop-gpu 3.5.3-5 is installed as `htop-gpu` next to the repo `htop`, each with its own
+`4870d3a8` video engine, `762add8d` own config file, `631bc883` fan meter, `363370bd` Intel CPU power; all
+pushed. htop-gpu 3.5.3-6 is installed as `htop-gpu` next to the repo `htop`, each with its own
 config (`~/.config/htop-gpu/htop-gpurc` with the GPU column, `~/.config/htop/htoprc`
 two columns). All five audit findings are fixed; findings 1-4 were
 independently re-tested, and Codex validated the finding 5 idle-clock test
@@ -77,10 +77,11 @@ Samsung GDDR6. Kernel 7.3.0-4-cachyos.
 | 6 | VRAM clock | `AMDGPUMemClock` | `VRAM clock: ` | hwmon `freq2_input` (mclk) + `mem_busy_percent` | `VRAM clock: 1258MHz 20.1Gbps busy:12%` | vs top level (1258 MHz), bar text `1258MHz 20.1Gbps` |
 | 7 | Video engine | `AMDGPUVideo` | `VCN` | `vcn_busy_percent` + `gpu_metrics` vclk/dclk | `VCN:100% vclk:2933MHz dclk:2200MHz` | 0–100%, bar text `100%` |
 | 8 | Fan | `AMDGPUFan` | `Fan` | hwmon `fan1_input` / `fan1_max` | `Fan:1193RPM max:3200RPM`, `Fan:0RPM (stopped)` | vs max, bar text `1193RPM` / `stopped` |
+| 9 | CPU power (Intel) | `IntelCPUPower` | `CPU` | powercap `intel-rapl:N` package `energy_uj` deltas / long term limit | `CPU:61.3W limit:250W` | vs PL1, bar text `61.3W/250W`; `no access` if root-only |
 
 Each one is a separate meter, so it can be placed, moved and switched between
 bar / text / graph / LED in F2 Setup like any built-in meter. Captions and names
-are placeholders until we settle them. All 8 rows are built (steps 2–4, fan later) and
+are placeholders until we settle them. All 9 rows are built (steps 2–4, fan and CPU power later) and
 show the real output.
 
 Caption rule (upstream): bar and graph modes draw only the first 3 characters of
@@ -226,6 +227,8 @@ htop-gpu/                    git repo (ignores src/, test/, makepkg output)
     check-upstream.sh        is a newer htop out than the one htop-gpu is built on?
     test-config-path.sh      own htop-gpurc, seeding (incl. read-only/symlinked stock), 33 checks
     test-check-style.sh      check-style.sh fails on findings (1) and broken tools (2)
+    rapl-sample.c            test driver for linux/IntelRAPL.c
+    test-rapl.py             CPU package power: fake powercap trees + live idle/busy
     gpu_metrics.py           gpu_metrics v1.3 decoder
     vcn_probe.py             runs a command, samples fdinfo + gpu_metrics
 ```
