@@ -3,6 +3,14 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+
+## 2026-10-29, Claude Code (Claude Opus 5.5): README and repo descriptions
+
+- Added `README.md` for the GitHub page, written in plain first person at the
+  user's request: what it shows, the hardware it's built for, the RAPL udev
+  rule, installing with makepkg, where the code lives, AI-assisted note.
+- Updated both GitHub "About" descriptions to mention the Intel iGPU and CPU power.
+
 ## 2026-10-29, Claude Code (Claude Opus 5.5): reviewed and committed the Intel iGPU work
 
 - Reviewed Codex's uncommitted Intel iGPU sampler/meters, tests, style-gate

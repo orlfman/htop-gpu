@@ -403,7 +403,7 @@ Both GitHub repos are private for now. Before making them public:
 - Turn `orlfman/htop` into a real GitHub fork of htop-dev/htop (forks can't be
   private, so it's a plain repo now): fork on GitHub, push `amdgpu-meters` there,
   delete the private copy.
-- Add a `LICENSE` (GPL-2.0-or-later, like htop) and a short `README.md` to htop-gpu.
+- Add a `LICENSE` (GPL-2.0-or-later, like htop) to htop-gpu. (`README.md` added 2026-10-29.)
 - `tools/test-sampler.py`: find the card's PCI address instead of hardcoding
   `0000:04:00.0`.
 
