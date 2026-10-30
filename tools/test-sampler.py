@@ -112,7 +112,7 @@ def expected(root, pci=PCI):
         mclk_levels = []
     vram_total = scaled(f"{dev}/mem_info_vram_total", 1024)
     e = {
-        "status": "active", "card": "RX 9070 XT", "pci": pci,
+        "status": "active", "card": "Radeon RX 9070 XT", "pci": pci,
         "vramTotal": vram_total, "mclkMax": max(mclk_levels) if mclk_levels else None,
         "tempCrit": [hwval("temp", temp_idx, lbl, "crit", 1000) for lbl in LABELS],
         "temp": [None] * 3, "sclkPeak": SCLK_SEED,
@@ -420,7 +420,7 @@ def main():
             time.sleep(0.3)
         for x in idle:
             problems = []
-            if x["status"] != "active" or x["card"] != "RX 9070 XT" or x["pci"] != PCI:
+            if x["status"] != "active" or x["card"] != "Radeon RX 9070 XT" or x["pci"] != PCI:
                 problems.append("identity")
             for k in ("gpuBusy", "memBusy", "vcnBusy"):
                 if x[k] is None or not 0 <= x[k] <= 100:

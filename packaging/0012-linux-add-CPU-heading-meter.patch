@@ -1,0 +1,158 @@
+From 798d8cfacbc99077aad2147f5acdad1fd50d1fb6 Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 21:55:35 -0700
+Subject: [PATCH 12/12] linux: add CPU heading meter
+
+Add IntelCPUInfo, a text-only heading for the CPU meters. Its caption
+is the model name from /proc/cpuinfo, read once and shown without the
+"(R)" and "(TM)" marks (in any case) or the " @ 3.70GHz" of older
+CPUs, e.g. "Intel Core Ultra 7 270K Plus"; "CPU" when there is none.
+Like AMDGPUInfo, the caption comes through getCaption.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ linux/IntelRAPLMeter.c | 88 ++++++++++++++++++++++++++++++++++++++++++
+ linux/IntelRAPLMeter.h |  2 +
+ linux/Platform.c       |  1 +
+ 3 files changed, 91 insertions(+)
+
+diff --git a/linux/IntelRAPLMeter.c b/linux/IntelRAPLMeter.c
+index 3365d9db..5f04d266 100644
+--- a/linux/IntelRAPLMeter.c
++++ b/linux/IntelRAPLMeter.c
+@@ -11,6 +11,10 @@ in the source distribution for its full text.
+ 
+ #include <math.h>
+ #include <stdbool.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <strings.h>
+ 
+ #include "CRT.h"
+ #include "Macros.h"
+@@ -20,8 +24,13 @@ in the source distribution for its full text.
+ #include "RichString.h"
+ #include "XUtils.h"
+ #include "linux/IntelRAPL.h"
++#include "linux/LinuxMachine.h"
+ 
+ 
++static const int IntelCPUInfoMeter_attributes[] = {
++   METER_TEXT,
++};
++
+ static const int IntelCPUPowerMeter_attributes[] = {
+    BATTERY,
+ };
+@@ -55,6 +64,85 @@ static void IntelCPUPowerMeter_display(const Object* cast, RichString* out) {
+    RichString_appendAscii(out, CRT_colors[METER_VALUE], buffer);
+ }
+ 
++/* Copies a cpuinfo model name without "(R)" / "(TM)" (any case) and the " @ 3.70GHz" of older CPUs */
++static void IntelCPUInfoMeter_cleanName(char* name, size_t size, const char* model) {
++   size_t len = 0;
++   bool space = false;
++   for (const char* at = model; *at && len < size - 1; at++) {
++      if (strncasecmp(at, "(R)", 3) == 0 || strncasecmp(at, "(TM)", 4) == 0) {
++         at = strchr(at, ')');
++         continue;
++      }
++      if (String_startsWith(at, " @ "))
++         break;
++      if (*at == ' ' || *at == '\t') {
++         space = len > 0;
++         continue;
++      }
++      if (space) {
++         if (len >= size - 2)
++            break;
++         name[len++] = ' ';
++      }
++      space = false;
++      name[len++] = *at;
++   }
++   name[len] = '\0';
++}
++
++/* The CPU's model name, read from /proc/cpuinfo once; empty if there is none */
++static const char* IntelCPUInfoMeter_modelName(void) {
++   static char name[64];
++   static bool read;
++   if (read)
++      return name;
++
++   read = true;
++   FILE* file = fopen(PROCCPUINFOFILE, "r");
++   if (!file)
++      return name;
++
++   char* line;
++   while ((line = String_readLine(file))) {
++      const char* value = strchr(line, ':');
++      bool found = String_startsWith(line, "model name") && value;
++      if (found)
++         IntelCPUInfoMeter_cleanName(name, sizeof(name), value + 1);
++      free(line);
++      if (found)
++         break;
++   }
++   fclose(file);
++   return name;
++}
++
++static void IntelCPUInfoMeter_updateValues(Meter* this) {
++   this->txtBuffer[0] = '\0';
++}
++
++static const char* IntelCPUInfoMeter_getCaption(const Meter* this) {
++   const char* name = IntelCPUInfoMeter_modelName();
++   return name[0] ? name : this->caption;
++}
++
++const MeterClass IntelCPUInfoMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++   },
++   .updateValues = IntelCPUInfoMeter_updateValues,
++   .getCaption = IntelCPUInfoMeter_getCaption,
++   .defaultMode = TEXT_METERMODE,
++   .supportedModes = 1 << TEXT_METERMODE,
++   .maxItems = 0,
++   .total = 0.0,
++   .attributes = IntelCPUInfoMeter_attributes,
++   .name = "IntelCPUInfo",
++   .uiName = "Intel CPU heading",
++   .caption = "CPU",
++   .description = "CPU model name, as a heading above the CPU meters"
++};
++
+ const MeterClass IntelCPUPowerMeter_class = {
+    .super = {
+       .extends = Class(Meter),
+diff --git a/linux/IntelRAPLMeter.h b/linux/IntelRAPLMeter.h
+index b83c4823..fd943535 100644
+--- a/linux/IntelRAPLMeter.h
++++ b/linux/IntelRAPLMeter.h
+@@ -10,6 +10,8 @@ in the source distribution for its full text.
+ #include "Meter.h"
+ 
+ 
++extern const MeterClass IntelCPUInfoMeter_class;
++
+ extern const MeterClass IntelCPUPowerMeter_class;
+ 
+ #endif /* HEADER_IntelRAPLMeter */
+diff --git a/linux/Platform.c b/linux/Platform.c
+index ae2e09b8..6e317895 100644
+--- a/linux/Platform.c
++++ b/linux/Platform.c
+@@ -292,6 +292,7 @@ const MeterClass* const Platform_meterTypes[] = {
+    &AMDGPUMemClockMeter_class,
+    &AMDGPUVideoMeter_class,
+    &AMDGPUFanMeter_class,
++   &IntelCPUInfoMeter_class,
+    &IntelCPUPowerMeter_class,
+    &IntelGPUInfoMeter_class,
+    &IntelGPUUsageMeter_class,

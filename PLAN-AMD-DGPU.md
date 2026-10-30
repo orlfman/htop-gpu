@@ -85,10 +85,13 @@ for the video clocks only, as today.
 All in `linux/AMDGPU.c`; the meter file and upstream files are untouched.
 
 1. **Card table keyed on GC version** instead of PCI device ID:
-   `{ gcMajor, gcMinor, gcRevision, memRateMultiplier }`. The `name` field goes
-   (it's never shown). Discovery picks the first amdgpu device by PCI address
-   whose GC version is in the table, so a machine with one of these cards plus
-   an AMD iGPU picks the card.
+   `{ gcMajor, gcMinor, gcRevision, memRateMultiplier }`. The heading meter
+   (`AMDGPUInfo`, added after this plan) shows the card's name, and the GC version
+   only names the chip, so the name becomes `Radeon` + chip (`Radeon Navi 21`),
+   with an optional PCI device ID → marketing name list on top (`0x7550` →
+   `Radeon RX 9070 XT` keeps this card's heading). Discovery picks the first
+   amdgpu device by PCI address whose GC version is in the table, so a machine
+   with one of these cards plus an AMD iGPU picks the card.
 2. **VCN fallback** to `average_mm_activity` when `vcn_busy_percent` is absent,
    decided once at discovery (absent = ENOENT), not retried every tick.
 3. **Clock bar scale**: today it's seeded at 3000 MHz for this card because the

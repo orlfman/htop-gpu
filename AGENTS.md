@@ -10,7 +10,9 @@ A personal custom build of htop 3.5.3 with header meters for an AMD RX 9070 XT:
 GPU usage, VRAM, power, edge/junction/memory temperatures, GPU clock, VRAM clock,
 video engine. Not meant for upstream htop, but kept as close to upstream as
 possible so new htop releases are easy to rebase onto.
-The installed 3.5.3-12 build also has Intel i915 meters for this machine's iGPU:
+The installed 3.5.3-13 build also has heading meters (`AMDGPUInfo` with the card's
+name, `IntelCPUInfo` with the CPU model; htop `44265679`, `798d8cfa`) and
+Intel i915 meters for this machine's iGPU:
 visible-app utilization, requested clock, approximate allocated memory, and
 combined video encode/decode. See `PLAN-INTEL-IGPU.md` for scope and release status.
 Clock/memory readouts show only the frequency/amount; their meter descriptions
@@ -101,6 +103,9 @@ Run after every change, from this folder:
 - After touching `linux/IntelGPU.c` or its meters: `python3 -I tools/test-intel-gpu.py --mutations`
   must end with `ALL PASSED` (stateful fake sysfs/proc, negative controls,
   live Intel encode/decode, ASan/UBSan). `--fake-only` skips live workloads.
+- After touching the heading meters (`AMDGPUInfo`, `IntelCPUInfo`) or the card
+  name: `python3 -I tools/test-headings.py` must end with `ALL PASSED` (about 50 s;
+  fake cpuinfo cases, fake card state changes under one running htop, ASan/UBSan).
 - After touching `tools/check-style.sh`: `tools/test-check-style.sh` must end
   with `ALL PASSED`. `check-style.sh` exits 2 (`STYLE CHECK FAILED TO RUN`) when
   a tool is missing or broken; that is not a pass.

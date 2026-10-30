@@ -7,6 +7,7 @@ It's built for my machine: an AMD Radeon RX 9070 XT, the Intel iGPU in my Core U
 Here's what the extra column looks like on my desktop:
 
 ```
+Radeon RX 9070 XT
 GPU[|||||                    7%]
 VRM[||||||||       1.93G/15.9G]
 Pwr[|||||||           33W/304W]
@@ -48,7 +49,9 @@ For the CPU:
 
 - Package power against the long term power limit (PL1), from Intel RAPL
 
-All of them work like normal htop meters. You add them in F2 Setup and can show each one as a bar, text, graph or LED.
+There are also two headings you can put above a group of meters: one with the card's name, and one with the CPU's name ("Intel Core Ultra 7 270K Plus" here), like the "Intel iGPU" one.
+
+All of them work like normal htop meters. You add them in F2 Setup and can show each one as a bar, text, graph or LED, except the headings, which are just text.
 
 ## Will it work on my computer?
 

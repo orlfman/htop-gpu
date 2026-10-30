@@ -3,6 +3,7 @@
 Original audit: 2026-10-28 (America/Phoenix). Latest Intel audit: 2026-10-29.
 Auditor: Codex.
 Status: findings 1-6 are resolved and validated; finding 6 is committed (`6c06d243`) and retained in installed `htop-gpu 3.5.3-12`, which labels CPU power Pwr. Finding 7 (P3) is deferred at the user's request. Finding 8 (P2, Intel client access loss reported as zero) is fixed and validated in 3.5.3-12; see the fix validation below.
+Findings 9-13 (P3, heading meters, Claude Code self-audit 2026-10-29): 9, 10, 11 and 13 are fixed (htop `44265679`, `798d8cfa`; installed in 3.5.3-13), 12 is accepted; see the last two sections.
 P2 means normal priority; P3 means low priority.
 
 ## Scope and baseline
@@ -1594,3 +1595,121 @@ Baseline: outer `b145c76` plus Codex's uncommitted Intel work, htop `61c598b1` p
 - Cost: the installed binary used 2.47% of one core over 30 s with the user's layout minus the Intel meters, and 2.87% with them (1.5 s refresh), so the /proc fdinfo pass costs about 0.4% of a core.
 - Committed as htop `bb4f7331` (`linux: add Intel iGPU meters`, crediting Codex) and re-exported the series; the new patch 0010 differs from Codex's working-tree patch only in abbreviated vs full `index` blob hashes, so the installed 3.5.3-12 matches the committed code and was not rebuilt.
 - No new findings.
+
+
+## Self-audit of the heading meters by Claude Code
+
+Date: 2026-10-29, at the user's request ("perform an audit of the work you did").
+Audited: the uncommitted `AMDGPUInfo` and `IntelCPUInfo` heading meters on htop
+`bb4f7331` (`linux/AMDGPU.c/.h`, `linux/AMDGPUMeter.c/.h`, `linux/IntelRAPLMeter.c/.h`,
+two registration lines in `linux/Platform.c`) and the outer changes (`tools/test-sampler.py`,
+`PLAN.md`, `PLAN-AMD-DGPU.md`, `README.md`, `CHANGELOG.md`) on outer `fd4cd58`.
+Installed `htop-gpu 3.5.3-12` does not contain them.
+
+### 9. [P3] Docs say every meter has bar, text, graph and LED modes
+
+`README.md` ("can show each one as a bar, text, graph or LED") and the `PLAN.md` Meters
+paragraph ("switched between bar / text / graph / LED") now sit next to two text-only
+headings. The `IntelGPUInfo` heading already made this untrue. Fix: say the headings are
+text only. Also cosmetic: one overlong line in `PLAN-AMD-DGPU.md` item 1.
+
+### 10. [P3] The CHANGELOG entry overstated the checks
+
+It said "all five suites `ALL PASSED`", but `tools/test-check-style.sh` had not been run
+(the rules only require it after touching `check-style.sh`, which this work didn't do),
+and it counted 9 model-name cases where 10 were run. The same "all five" claim was made
+to the user. `test-check-style.sh` has now been run: `ALL PASSED`. The entry is corrected.
+
+### 11. [P3] Lowercase `(tm)` / `(r)` are not stripped from the CPU name
+
+`IntelCPUInfoMeter_cleanName()` only matches `(R)` and `(TM)`, so older names keep them:
+`AMD Athlon(tm) II X4 640 Processor`, `Intel(r) Pentium(r) 4 CPU 3.00GHz`. Not this
+machine. Fix: compare with `strncasecmp()`.
+
+### 12. [P3] Truncation can split a multi-byte character
+
+The name is cut at 63 bytes, which can leave half a UTF-8 sequence (shown as `�`).
+x86 `model name` strings are ASCII, so this is theoretical; noted, no fix proposed.
+
+### 13. [P3] No committed regression tests for the headings
+
+The heading states and the name cleanup were checked with captures, a one-off build that
+reads a fake cpuinfo, and a scratch harness, none of which are in `tools/`. Only the card
+name is covered by `test-sampler.py`. Fix: add the cleanup cases and the heading states
+to the suites.
+
+### Checked and found correct
+
+- `getCaption` is called only by the meter draw modes in `Meter.c`, the same way upstream's
+  `DynamicMeter_getCaption()` uses it, so `this->host` is valid. The AMD heading's sample
+  read in it hits the per-tick cache. The returned pointers are the static card table,
+  the static name buffer or the meter's own caption, never NULL.
+- `maxItems = 0`, text-only meters with an empty `txtBuffer` are the same pattern as the
+  audited `IntelGPUInfo`.
+- Under one running ASan/UBSan htop on a fake tree, active → suspended (`Radeon RX 9070 XT:
+  sleep`), active → unbound (`AMD GPU: N/A`), unbound → active and suspended → active (name
+  back) were all right, with no sanitizer reports.
+- The real `IntelCPUInfoMeter_cleanName()` was run under ASan/UBSan on 17 inputs: `(R)`/`(TM)`,
+  ` @ GHz`, `12th Gen ...`, tabs and repeated spaces, `Intel(R` (malformed), `(R)(TM)` alone
+  (empty, so the caption falls back to `CPU`), ARM, empty, buffer sizes 1-4. No overflow,
+  and the space is dropped rather than written without room.
+- Build without warnings, `STYLE OK`, and `ALL PASSED` from `test-sampler.py`, `test-rapl.py`,
+  `test-intel-gpu.py --mutations`, `test-config-path.sh` and `test-check-style.sh`. The dev
+  binary has no ASan or fake paths. `make -q` reports it stale, but a real `make` compiles
+  nothing and the binary's checksum doesn't change; `config.h` and `stamp-h1` share a
+  timestamp second.
+- Upstream files: only the two `Platform.c` registration lines.
+
+Notes, not findings: `IntelCPUInfo` shows any vendor's name while its UI name says Intel,
+which matches the Intel-only CPU scope. The AMD heading used alone does a full AMD sample
+per tick; next to the other AMD meters that sample is shared and costs nothing extra.
+
+Not tested: interactive F2 Setup with the new meters, the installed package, the user's
+real config. Nothing was committed, installed, or written to the user's configs.
+
+
+## Resolution of findings 9, 11 and 13
+
+Date: 2026-10-29, at the user's request ("Fix them"). By Claude Code. Uncommitted, on the
+same baseline as the self-audit.
+
+- 9: `README.md` and the `PLAN.md` Meters paragraph now say the headings (`AMDGPUInfo`,
+  `IntelCPUInfo`, `IntelGPUInfo`) are text only. The overlong `PLAN-AMD-DGPU.md` line is
+  reflowed.
+- 11: `IntelCPUInfoMeter_cleanName()` matches `(R)` / `(TM)` with `strncasecmp()`
+  (`<strings.h>`, as upstream's `Panel.c` does), so `AMD Athlon(tm) II X4 640 Processor`
+  becomes `AMD Athlon II X4 640 Processor`.
+- 13: new `tools/test-headings.py`. It rebuilds `linux/AMDGPU.c`, `linux/AMDGPUMeter.c` and
+  `linux/IntelRAPLMeter.c` with a fake cpuinfo, a fake sysfs root and ASan/UBSan (then
+  rebuilds them normally), and runs the real htop in a pty with only the two headings:
+  14 cpuinfo cases (text and cyan color), six AMD card states including four changes under
+  one running htop, a sanitizer report check, and a live check of the normal binary. Listed
+  in `AGENTS.md` Checks.
+- 12 stays as accepted: x86 model names are ASCII.
+
+Validation:
+- Before the fix, `test-headings.py` failed exactly the two lowercase cases
+  (`AMD Athlon(tm) ...`, `Intel(r) Pentium(r) ...`) and passed the other 24 checks. After
+  the fix: `ALL PASSED`.
+- Negative control: with `AMDGPUInfo` mutated to always show its static caption and no
+  status text, all 8 AMD checks failed. The source was restored byte for byte (`cmp`).
+- Build without warnings, `STYLE OK`, and `ALL PASSED` from `test-sampler.py`,
+  `test-rapl.py`, `test-intel-gpu.py --mutations`, `test-config-path.sh` and
+  `test-check-style.sh`. The dev binary has no sanitizer or fake paths, and a real `make`
+  compiles nothing.
+
+Limits: the cpuinfo and card states are fakes (real card files copied by `fake-sysfs.py`);
+interactive F2 Setup, the installed package and the user's config were not tested.
+Nothing was committed, installed, or written to the user's configs.
+
+Release (same day, at the user's request): committed as htop `44265679` (`linux: add AMD
+GPU heading meter`) and `798d8cfa` (`linux: add CPU heading meter`); the first one was
+built on its own before the second was committed. Patches re-exported (0011, 0012 new;
+0001-0010 differ only in their `[PATCH n/12]` numbering), pkgrel 13. `makepkg -fC` built;
+`namcap` reports the same three lines as 3.5.3-12. Installed `htop-gpu 3.5.3-13` with the
+user's sudo: the installed binary matches the package, `pacman -Qkk` shows 0 altered files
+for htop-gpu and htop. The user's `htop-gpurc` was backed up
+(`htop-gpurc.bak-2026-10-29_21-59-40`) with no htop running, then got `IntelCPUInfo`
+above `CPU(1)` and `AMDGPUInfo` above `AMDGPUUsage`, both in text mode. A capture of the
+installed binary with a copy of it shows both headings, and the meter lines survived
+htop's rewrite of the copy.

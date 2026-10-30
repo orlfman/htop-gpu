@@ -4,7 +4,8 @@ Status (2026-10-29): steps 1–5 done. `amdgpu-meters` = `6813391d` sampler,
 `7171bb46` GPU usage / VRAM / power, `0b54b642` temperatures and clocks,
 `4870d3a8` video engine, `762add8d` own config file, `631bc883` fan meter,
 `363370bd` Intel CPU power, `6c06d243` PL1 refresh, `61c598b1` CPU Pwr caption,
-`bb4f7331` Intel iGPU meters; all pushed. htop-gpu 3.5.3-12 is installed as `htop-gpu` next to the repo `htop`, each with its own
+`bb4f7331` Intel iGPU meters, `44265679` AMD GPU heading, `798d8cfa` CPU heading;
+all pushed. htop-gpu 3.5.3-13 is installed as `htop-gpu` next to the repo `htop`, each with its own
 config (`~/.config/htop-gpu/htop-gpurc` with the GPU column, `~/.config/htop/htoprc`
 two columns). All five audit findings are fixed; findings 1-4 were
 independently re-tested, and Codex validated the finding 5 idle-clock test
@@ -109,11 +110,17 @@ Samsung GDDR6. Kernel 7.3.0-4-cachyos.
 | 7 | Video engine | `AMDGPUVideo` | `VCN` | `vcn_busy_percent` + `gpu_metrics` vclk/dclk | `VCN:100% vclk:2933MHz dclk:2200MHz` | 0–100%, bar text `100%` |
 | 8 | Fan | `AMDGPUFan` | `Fan` | hwmon `fan1_input` / `fan1_max` | `Fan:1193RPM max:3200RPM`, `Fan:0RPM (stopped)` | vs max, bar text `1193RPM` / `stopped` |
 | 9 | CPU power (Intel) | `IntelCPUPower` | `Pwr` | powercap `intel-rapl:N` package `energy_uj` deltas / long term limit | `Pwr:61.3W limit:250W` | vs PL1, bar text `61.3W/250W`; `no access` if root-only |
+| 10 | AMD GPU heading | `AMDGPUInfo` | card name (`AMD GPU` if none) | card table `name` | `Radeon RX 9070 XT`, `Radeon RX 9070 XT: sleep`, `AMD GPU: N/A` | text only |
+| 11 | CPU heading | `IntelCPUInfo` | CPU model name (`CPU` if none) | `/proc/cpuinfo` `model name`, read once, without `(R)` / `(TM)` / ` @ GHz` | `Intel Core Ultra 7 270K Plus` | text only |
 
 Each one is a separate meter, so it can be placed, moved and switched between
-bar / text / graph / LED in F2 Setup like any built-in meter. Captions and names
-are placeholders until we settle them. All 9 rows are built (steps 2–4, fan and CPU power later) and
-show the real output.
+bar / text / graph / LED in F2 Setup like any built-in meter. The exceptions are the
+headings (`AMDGPUInfo`, `IntelCPUInfo` and the Intel iGPU's `IntelGPUInfo`), which
+are text only. Captions and names
+are placeholders until we settle them. All 11 rows are built (steps 2–4; fan, CPU power and
+the two headings later) and show the real output. The headings work like the Intel iGPU
+one (`IntelGPUInfo`): text-only meters whose caption comes from `getCaption`, as
+upstream's `DynamicMeter` does.
 
 Caption rule (upstream): bar and graph modes draw only the first 3 characters of
 a caption, so bar-mode meters use 3-character captions (`Mem`, `Swp`, `GPU`),

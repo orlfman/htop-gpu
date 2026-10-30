@@ -1,0 +1,134 @@
+From 44265679fc5a0fde90bc6fcec4119edf277dc28d Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 21:54:35 -0700
+Subject: [PATCH 11/12] linux: add AMD GPU heading meter
+
+Add AMDGPUInfo, a text-only heading for the AMD GPU meters, like the
+Intel iGPU one. Its caption is the card's name from the card table
+(now "Radeon RX 9070 XT"), returned through getCaption as upstream's
+DynamicMeter does; ": sleep" follows it while the card is runtime
+suspended, and "AMD GPU: N/A" is shown when no card is found.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ linux/AMDGPU.c      |  2 +-
+ linux/AMDGPU.h      |  2 +-
+ linux/AMDGPUMeter.c | 38 ++++++++++++++++++++++++++++++++++++++
+ linux/AMDGPUMeter.h |  2 ++
+ linux/Platform.c    |  1 +
+ 5 files changed, 43 insertions(+), 2 deletions(-)
+
+diff --git a/linux/AMDGPU.c b/linux/AMDGPU.c
+index c1779b80..11d41720 100644
+--- a/linux/AMDGPU.c
++++ b/linux/AMDGPU.c
+@@ -43,7 +43,7 @@ in the source distribution for its full text.
+ #define GPU_METRICS_UNSET              0xFFFF
+ 
+ static const AMDGPUCard AMDGPU_cards[] = {
+-   { .deviceId = 0x7550, .name = "RX 9070 XT", .memRateMultiplier = 16, .sclkSeed = 3000.0 },
++   { .deviceId = 0x7550, .name = "Radeon RX 9070 XT", .memRateMultiplier = 16, .sclkSeed = 3000.0 },
+ };
+ 
+ static const char* const AMDGPU_tempLabels[AMDGPU_TEMP_COUNT] = {
+diff --git a/linux/AMDGPU.h b/linux/AMDGPU.h
+index c92c0459..925c575e 100644
+--- a/linux/AMDGPU.h
++++ b/linux/AMDGPU.h
+@@ -25,7 +25,7 @@ typedef enum AMDGPUTemp_ {
+ 
+ typedef struct AMDGPUCard_ {
+    uint16_t deviceId;
+-   const char* name;
++   const char* name;                 /* shown by the heading meter */
+    unsigned int memRateMultiplier;   /* memory clock to data rate per pin (GDDR6: 16) */
+    double sclkSeed;                  /* MHz, initial maximum of the GPU clock bar */
+ } AMDGPUCard;
+diff --git a/linux/AMDGPUMeter.c b/linux/AMDGPUMeter.c
+index 9440cd83..aa2ec94f 100644
+--- a/linux/AMDGPUMeter.c
++++ b/linux/AMDGPUMeter.c
+@@ -24,6 +24,10 @@ in the source distribution for its full text.
+ #include "linux/AMDGPU.h"
+ 
+ 
++static const int AMDGPUInfoMeter_attributes[] = {
++   METER_TEXT,
++};
++
+ static const int AMDGPUUsageMeter_attributes[] = {
+    GPU_ENGINE_1,
+ };
+@@ -98,6 +102,22 @@ static bool AMDGPUMeter_displayStart(const Meter* this, RichString* out) {
+    return false;
+ }
+ 
++/* The heading is the card's name; it only gets text after it when the card sleeps or is gone */
++static void AMDGPUInfoMeter_updateValues(Meter* this) {
++   const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
++   if (sample->status == AMDGPU_ACTIVE) {
++      this->txtBuffer[0] = '\0';
++      return;
++   }
++
++   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), ": %s", sample->status == AMDGPU_SUSPENDED ? "sleep" : "N/A");
++}
++
++static const char* AMDGPUInfoMeter_getCaption(const Meter* this) {
++   const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
++   return sample->card ? sample->card->name : this->caption;
++}
++
+ static void AMDGPUUsageMeter_updateValues(Meter* this) {
+    const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
+    if (AMDGPUMeter_isUnavailable(this, sample, sample->gpuBusy, this->total))
+@@ -336,6 +356,24 @@ static void AMDGPUFanMeter_display(const Object* cast, RichString* out) {
+    RichString_appendAscii(out, CRT_colors[METER_VALUE], buffer);
+ }
+ 
++const MeterClass AMDGPUInfoMeter_class = {
++   .super = {
++      .extends = Class(Meter),
++      .delete = Meter_delete,
++   },
++   .updateValues = AMDGPUInfoMeter_updateValues,
++   .getCaption = AMDGPUInfoMeter_getCaption,
++   .defaultMode = TEXT_METERMODE,
++   .supportedModes = 1 << TEXT_METERMODE,
++   .maxItems = 0,
++   .total = 0.0,
++   .attributes = AMDGPUInfoMeter_attributes,
++   .name = "AMDGPUInfo",
++   .uiName = "AMD GPU heading",
++   .caption = "AMD GPU",
++   .description = "AMD GPU name, as a heading above the other AMD GPU meters"
++};
++
+ const MeterClass AMDGPUUsageMeter_class = {
+    .super = {
+       .extends = Class(Meter),
+diff --git a/linux/AMDGPUMeter.h b/linux/AMDGPUMeter.h
+index 6c8bc36a..5a5ca401 100644
+--- a/linux/AMDGPUMeter.h
++++ b/linux/AMDGPUMeter.h
+@@ -10,6 +10,8 @@ in the source distribution for its full text.
+ #include "Meter.h"
+ 
+ 
++extern const MeterClass AMDGPUInfoMeter_class;
++
+ extern const MeterClass AMDGPUUsageMeter_class;
+ 
+ extern const MeterClass AMDGPUVRAMMeter_class;
+diff --git a/linux/Platform.c b/linux/Platform.c
+index bc7783fc..ae2e09b8 100644
+--- a/linux/Platform.c
++++ b/linux/Platform.c
+@@ -283,6 +283,7 @@ const MeterClass* const Platform_meterTypes[] = {
+    &OpenRCUserMeter_class,
+    &FileDescriptorMeter_class,
+    &GPUMeter_class,
++   &AMDGPUInfoMeter_class,
+    &AMDGPUUsageMeter_class,
+    &AMDGPUVRAMMeter_class,
+    &AMDGPUPowerMeter_class,

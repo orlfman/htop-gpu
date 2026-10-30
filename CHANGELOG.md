@@ -4,6 +4,42 @@ Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
 
+## 2026-10-29, Claude Code (Claude Opus 5.5): AMD GPU and CPU heading meters
+
+- At the user's request, added two text-only heading meters like `IntelGPUInfo`:
+  `AMDGPUInfo` (card name, `Radeon RX 9070 XT`; `: sleep` when runtime
+  suspended, `AMD GPU: N/A` without a card) in `linux/AMDGPUMeter.c`, and
+  `IntelCPUInfo` (`/proc/cpuinfo` model name read once, without `(R)`, `(TM)`
+  and ` @ x.xxGHz`: `Intel Core Ultra 7 270K Plus`, `CPU` if none) in
+  `linux/IntelRAPLMeter.c`. Captions come from `getCaption`, as in upstream's
+  `DynamicMeter`. The card table name is now `Radeon RX 9070 XT`.
+- `tools/test-sampler.py` expects the new card name.
+- Checks: build without warnings, `STYLE OK`, `ALL PASSED` from `test-sampler.py`,
+  `test-rapl.py`, `test-intel-gpu.py --mutations` and `test-config-path.sh`
+  (`test-check-style.sh` only in the self-audit below). ASan/UBSan captures on
+  the real card and fake trees (normal, suspended, unbound) show the right
+  headings and no findings. A one-off build reading a fake cpuinfo checked 10
+  cases (Arrow Lake, i7-8700K `@ GHz`, Xeon with extra spaces, Ryzen, no model
+  line, empty name, empty and missing file, 63-char truncation twice).
+- Self-audit at the user's request (AUDIT.md): findings 9-13, all P3 (docs say
+  headings have bar modes, this entry overstated the checks (corrected), lowercase
+  `(tm)` not stripped, UTF-8 cut on truncation, no committed heading tests).
+  Stateful card-state flips under one ASan htop passed.
+- Fixed 9, 11 and 13 at the user's request: README/PLAN say headings are text
+  only; `(R)`/`(TM)` are matched in any case (`strncasecmp`); new
+  `tools/test-headings.py` (14 cpuinfo cases, 6 card states with 4 changes under
+  one running htop, ASan/UBSan, live), added to AGENTS.md Checks. It failed only
+  the two lowercase cases before the fix and caught a mutated AMD heading (8
+  FAILs). All six suites `ALL PASSED`, `STYLE OK`.
+- Released at the user's request: htop `44265679` AMD GPU heading and `798d8cfa`
+  CPU heading, pushed; patches re-exported (12), pkgrel 13, built, namcap as
+  before, installed 3.5.3-13 (matches the package, `pacman -Qkk` clean).
+- The user's htop-gpurc: backed up to `htop-gpurc.bak-2026-10-29_21-59-40`, then
+  `IntelCPUInfo` added above `CPU(1)` and `AMDGPUInfo` above `AMDGPUUsage` (text
+  mode). The first column is now 17 rows, so the header is one row taller. No AUR package
+  (the user decided against it).
+- Preview config: `test/headings.rc` (headings above CPU(1) and AMDGPUUsage).
+
 ## 2026-10-29, Claude Code (Claude Opus 5.5): plan for RDNA 2+ dedicated cards
 
 - At the user's request, narrowed the AMD plan to RDNA 2/3/4 dGPUs and wrote
