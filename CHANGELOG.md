@@ -4,6 +4,30 @@ Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
 
+## 2026-11-10, Codex: fix heading color-test isolation
+
+- Fixed finding 14 by removing `NO_COLOR` only from the heading test's capture
+  subprocess environment. Both parent settings pass all 25 heading checks.
+- Build, style, and AMD sampler checks passed. Results and limits are in
+  AUDIT.md. The commit includes the full patch audit and the finding 14 fix.
+
+## 2026-11-10, Codex: full patch audit
+
+- Audited all 12 source commits above htop 3.5.3 at `798d8cfa`, outer `fda5348`,
+  and package definition 3.5.3-13. No new actionable runtime defect confirmed.
+- New finding 14 (P3): `test-headings.py` inherits `NO_COLOR` while asserting cyan,
+  producing 20 false failures with `NO_COLOR=1`. All 25 heading checks pass with
+  that variable removed for the test process. Suggested fix recorded, not applied.
+- Build/style passed; config, style-gate, AMD, RAPL and Intel suites all passed,
+  including live workloads, Intel negative controls, and sanitizer checks.
+  Additional AMD sleep/sensor-renumber and two-package RAPL recovery probes passed.
+- All 12 package checksums match; patches apply to tag 3.5.3 without fuzz/offsets
+  and reproduce all 16 changed source files exactly. No package rebuild/install.
+- Full results and limitations are in AUDIT.md; ignored logs are in
+  `test/audit-2026-11-10/`. Findings 7 (deferred) and 12 (accepted) remain as before.
+- Only audit/status records changed. Source/patches, user configs and system settings
+  unchanged; no commit/push. Finding 14 is left open for a requested fix.
+
 ## 2026-10-29, Claude Code (Claude Opus 5.5): AMD GPU and CPU heading meters
 
 - At the user's request, added two text-only heading meters like `IntelGPUInfo`:

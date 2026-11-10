@@ -39,6 +39,12 @@ All 18 stateful fake groups/three negative controls passed; the old source fails
 ten new assertions. Full sanitized meter transitions and package checks passed.
 No new GPU load tests; real PM/reference comparison limits remain. See AUDIT.md.
 
+Latest full patch audit (2026-11-10, Codex): source `798d8cfa`, package 3.5.3-13.
+No new actionable runtime defect confirmed. All exported patches and checksums
+match the source. Finding 14 (P3) is fixed in the heading test, which passes all
+25 checks with `NO_COLOR` set or unset. Build, style, and AMD sampler checks
+also passed after the fix. See AUDIT.md for evidence and limits.
+
 Planned next: [AMD meters on RDNA 2+ dedicated cards](PLAN-AMD-DGPU.md)
 (investigated 2026-10-29, not started), the first part of
 [AMD meters for any AMD GPU](PLAN-AMD-AGNOSTIC.md).

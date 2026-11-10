@@ -1,9 +1,10 @@
 # htop-gpu audit findings
 
-Original audit: 2026-10-28 (America/Phoenix). Latest Intel audit: 2026-10-29.
+Original audit: 2026-10-28 (America/Phoenix). Latest full patch audit: 2026-11-10.
 Auditor: Codex.
 Status: findings 1-6 are resolved and validated; finding 6 is committed (`6c06d243`) and retained in installed `htop-gpu 3.5.3-12`, which labels CPU power Pwr. Finding 7 (P3) is deferred at the user's request. Finding 8 (P2, Intel client access loss reported as zero) is fixed and validated in 3.5.3-12; see the fix validation below.
 Findings 9-13 (P3, heading meters, Claude Code self-audit 2026-10-29): 9, 10, 11 and 13 are fixed (htop `44265679`, `798d8cfa`; installed in 3.5.3-13), 12 is accepted; see the last two sections.
+Finding 14 (P3, heading color-test environment isolation) is fixed and validated locally. See the resolution below.
 P2 means normal priority; P3 means low priority.
 
 ## Scope and baseline
@@ -1713,3 +1714,125 @@ for htop-gpu and htop. The user's `htop-gpurc` was backed up
 above `CPU(1)` and `AMDGPUInfo` above `AMDGPUUsage`, both in text mode. A capture of the
 installed binary with a copy of it shows both headings, and the meter lines survived
 htop's rewrite of the copy.
+
+
+## Full patch audit: 2026-11-10
+
+Auditor: Codex. Requested review of the project's patches; no fixes requested.
+The plan listed `In progress: nobody` at entry. Both repositories were clean.
+
+### Audited version and scope
+
+- Outer repository: `fda534892c8ed76f09a2ca7c452b50489ec6d637`.
+- htop source: `798d8cfacbc99077aad2147f5acdad1fd50d1fb6`, all 12 commits above tag `3.5.3`.
+- Package definition and installed package: `htop-gpu 3.5.3-13`; stock package: `htop 3.5.3-1.1`.
+- Reviewed AMD sampler/meters, Intel iGPU sampler/meters, Intel RAPL/CPU heading,
+  configuration seeding, upstream registration/build integration, package patches,
+  and validation tools. Reviewed the design and prior findings before classifying issues.
+- All 12 patch SHA-256 values match `PKGBUILD`. Applied the full series to an isolated
+  export of tag `3.5.3`, with fuzz disabled: no offsets or fuzz; all 16 changed source
+  files match source HEAD byte for byte. `git diff --check 3.5.3..HEAD` is clean.
+
+### 14. [P3] Heading color tests inherit an environment that disables colors
+
+Location: `tools/test-headings.py:69-70`; assertions: lines 134 and 144.
+Related behavior: `tools/htop-capture.py:15` preserves the environment;
+upstream `src/htop/CommandLine.c:148-150` honors nonempty `NO_COLOR`.
+
+The heading suite assumes cyan output but starts the capture subprocess without
+controlling `NO_COLOR`. In this audit environment, `NO_COLOR=1` was already set.
+The documented `python3 -I tools/test-headings.py` invocation therefore exited 1
+with 20 false failures: all 14 CPU cases and all six AMD state cases printed the
+correct text, but their captured color was `[default]` instead of `[cyan]`.
+The other five assertions passed, including the sanitizer-report check.
+This is a test-isolation defect, not incorrect heading rendering: htop is correctly
+honoring its no-color setting. Python's isolated mode does not remove this variable.
+
+Reproduction on the unmodified source:
+
+- `python3 -I tools/test-headings.py` with inherited `NO_COLOR=1`: 20 failures.
+- `env -u NO_COLOR python3 -I tools/test-headings.py`: exit 0, all 25 checks pass.
+
+Suggested correction: pass a copy of the environment with `NO_COLOR` removed to
+this color-specific suite's capture subprocess. Preserve the general capture
+helper's environment handling so it can still inspect deliberate no-color output.
+Validate the suite with the parent `NO_COLOR` both set and unset.
+No correction was implemented during this audit.
+
+### Validation results
+
+Logs are retained locally under ignored `test/audit-2026-11-10/`.
+
+| Check | Result |
+| --- | --- |
+| `make -C src/htop -j8` | Exit 0; no warnings emitted (initial build already current) |
+| `tools/check-style.sh` | `STYLE OK` |
+| `tools/test-check-style.sh` | `ALL PASSED`, 7 checks |
+| `tools/test-config-path.sh` | `ALL PASSED`, 33 checks; disposable homes/configs |
+| `python3 -I tools/test-sampler.py` | `ALL PASSED`, 106 checks, including fake-state recovery and live AMD encode |
+| `python3 -I tools/test-rapl.py` | `ALL PASSED`, 49 checks, including live idle/busy power |
+| `python3 -I tools/test-intel-gpu.py --mutations` | `ALL PASSED`, 158 checks, including three negative controls and live Intel encode/decode/graphics |
+| `python3 -I tools/test-headings.py` | 20 false color failures with inherited `NO_COLOR=1`; see finding 14 |
+| `env -u NO_COLOR python3 -I tools/test-headings.py` | `ALL PASSED`, 25 checks |
+
+Live observations: AMD video activity reached 100%, with vclk/dclk reaching
+2933/2200 MHz. Intel encode/decode peaks were 29.3%/35.1%, and the graphics workload
+reached 100%. CPU package power increased from approximately 16.34 W idle to
+125.80 W under the brief all-core workload. All sampler sanitizer checks passed.
+The heading suite rebuilt the relevant sources with ASan/UBSan, checked real htop
+output against fake cpuinfo and changing card state, and restored the normal binary.
+No sanitizer reports occurred; the suite verified that the normal binary contained
+neither its fake paths nor ASan instrumentation.
+
+Additional independent isolated sampler checks passed under ASan/UBSan:
+
+- AMD: active to suspended while a dynamic attribute was replaced with a blocking
+  FIFO, then hwmon renumbering during suspension and recovery on wake. No blocked
+  dynamic read; temperatures and clocks recovered; clean exit.
+- RAPL: two packages, permission denial/recovery and malformed energy/recovery.
+  Fresh baselines and combined 30 W / 375 W results were correct; clean exit.
+
+An artificial individual-fdinfo denial despite a readable shared alias produced
+conservative unavailable Intel rates. Ordinary procfs does not expose those
+per-file chmod permissions; a real scan race was not reproduced. The design
+allows unavailable samples after failed reads, so this was not classified as a
+new defect.
+
+### Conclusion, remaining limits, and preservation
+
+One new low-priority test defect (14); no new actionable runtime defect confirmed.
+Prior finding 7 (later CPU packages ignored after initial discovery) remains deferred
+at the user's request. Finding 12 (possible UTF-8 truncation in the CPU heading)
+remains accepted. This audit does not change either decision.
+
+Real runtime suspend/resume, physical device hotplug, hardware outside the documented
+RX 9070 XT / supported Intel iGPU scope, and an external Mission Center comparison
+were not tested. No interactive F2 walkthrough or new whole-program sanitizer run
+covering every meter mode was performed. Sanitizer coverage here comes from the
+sampler suites, isolated probes, and the heading suite's instrumented sources.
+The package was not rebuilt or installed, and the installed binary was not used
+as the test target; package verification here covers patch integrity/application.
+
+Only `AUDIT.md`, `CHANGELOG.md`, and `PLAN.md` were edited. Source code and exported
+patches remain unchanged; the source working tree is clean. Test/build artifacts
+are ignored. User configurations and system settings were not edited. No commit,
+push, package installation, or dependency installation was performed.
+
+
+## Resolution of finding 14 (2026-11-10)
+
+At the user's request, Codex updated `tools/test-headings.py` to remove `NO_COLOR`
+from a copy of the environment passed to its capture subprocess. This gives the
+heading assertions the same color output regardless of the caller's preference.
+The general capture helper continues to honor the caller's environment.
+
+Both `NO_COLOR=1 python3 -I tools/test-headings.py` and
+`env -u NO_COLOR python3 -I tools/test-headings.py` passed all 25 assertions,
+including the ASan/UBSan report check and the live heading checks. The development
+build, style check, and AMD sampler suite also passed. Logs are under ignored
+`test/audit-2026-11-10/fix-14/`.
+
+Validation used htop source `798d8cfa`. Only the heading test and project records
+were edited. The checks covered the development binary and the heading suite's
+fake states. No package rebuild or installation, real suspend, or hardware
+hotplug was tested.

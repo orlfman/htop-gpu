@@ -66,8 +66,11 @@ def fake_card(root, *state):
 def headings(rc, binary, seconds, during=None):
     """The two header rows as (text, colors) after `seconds`; `during` runs halfway through"""
     htoprc(rc)
+    # These assertions expect color even if the caller disables it for regular use.
+    env = os.environ.copy()
+    env.pop("NO_COLOR", None)
     p = subprocess.Popen([sys.executable, "-I", f"{HERE}/htop-capture.py", rc, binary, str(seconds)],
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
     if during:
         time.sleep(seconds / 2)
         during()
