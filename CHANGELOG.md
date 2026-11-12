@@ -58,8 +58,11 @@ upstream files are untouched.
   `libdrm` as optional dependency (card names). `makepkg -fC` built
   `packaging/htop-gpu-3.5.3-14-x86_64.pkg.tar.zst`; checks are in AUDIT.md. The
   outer commit also carries Codex's uncommitted 2026-11-10 record edits.
-- Not installed, not pushed (neither was asked for).
-- Next: install 3.5.3-14 and push when the user says so; then the rest of
+- Installed afterwards at the user's request (`pacman -U`, user typed the
+  password): `pacman -Q` shows 3.5.3-14, `/usr/bin/htop-gpu` is byte-identical to
+  the package's executable and shows the card heading and all AMD meters live.
+- Not pushed (not asked for).
+- Next: push when the user says so; then the rest of
   PLAN-AMD-AGNOSTIC.md.
 
 ## 2026-11-10, Codex: rebuild the local install package

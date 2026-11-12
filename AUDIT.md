@@ -1881,3 +1881,8 @@ on the development tree before the commit). Archive SHA-256:
 No new findings. Limits: the test suites ran on the development tree, not on
 the packaged executable; no installation; no real RDNA 2/3 or Navi 44 card (fake
 trees only); the config path suite was not rerun (`Settings.c` untouched).
+
+Installed 2026-11-11 at the user's request. `pacman -Q htop-gpu` reports
+3.5.3-14, `/usr/bin/htop-gpu` matches the package executable byte for byte and
+shows `Radeon RX 9070 XT` with all AMD meters live in a throwaway config. Stock
+`htop` 3.5.3-1.1 is untouched.

@@ -1,7 +1,7 @@
 # htop-gpu: AMD meters on RDNA 2 and newer dedicated cards (plan)
 
 Status (2026-11-11): implemented and tested by Claude Code, htop `f842f486`,
-packaged as 3.5.3-14 (not installed). Three things differ from the plan below; the CHANGELOG entry of
+packaged and installed as 3.5.3-14. Three things differ from the plan below; the CHANGELOG entry of
 2026-11-11 has the details:
 
 - Card names come from libdrm's `/usr/share/libdrm/amdgpu.ids` (PCI device ID +

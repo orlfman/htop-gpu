@@ -51,8 +51,8 @@ Its executable matches the installed 3.5.3-13 build. See AUDIT.md for checks.
 
 [AMD meters on RDNA 2+ dedicated cards](PLAN-AMD-DGPU.md): done 2026-11-11
 (Claude Code). htop `f842f486`, patch 0013, package 3.5.3-14 built and checked at
-`packaging/htop-gpu-3.5.3-14-x86_64.pkg.tar.zst`, **not installed** (the installed
-build is still 3.5.3-13) and not pushed. See the CHANGELOG entry for what differs
+`packaging/htop-gpu-3.5.3-14-x86_64.pkg.tar.zst` and **installed** 2026-11-11
+(replacing 3.5.3-13). Not pushed. See the CHANGELOG entry for what differs
 from the plan, AUDIT.md for the package checks.
 
 Planned next: the rest of [AMD meters for any AMD GPU](PLAN-AMD-AGNOSTIC.md)
