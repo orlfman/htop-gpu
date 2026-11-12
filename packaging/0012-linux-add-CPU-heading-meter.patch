@@ -1,7 +1,7 @@
 From 798d8cfacbc99077aad2147f5acdad1fd50d1fb6 Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 21:55:35 -0700
-Subject: [PATCH 12/13] linux: add CPU heading meter
+Subject: [PATCH 12/14] linux: add CPU heading meter
 
 Add IntelCPUInfo, a text-only heading for the CPU meters. Its caption
 is the model name from /proc/cpuinfo, read once and shown without the

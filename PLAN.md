@@ -55,6 +55,14 @@ Its executable matches the installed 3.5.3-13 build. See AUDIT.md for checks.
 (replacing 3.5.3-13). Not pushed. See the CHANGELOG entry for what differs
 from the plan, AUDIT.md for the package checks.
 
+RDNA 2+ audit (2026-11-11, Codex): two open findings in 3.5.3-14 — 15 (P2),
+sensor-directory access errors can permanently suppress cached sensors after
+access returns; 16 (P3), an initial clock-scale read failure is not retried once
+a current clock has been sampled. Both reproduced; build/style and all existing
+AMD/heading tests pass. Patches and installed files match the reviewed source.
+See AUDIT.md. Both fixed 2026-11-11 (Claude Code): htop `7c2fe84b`, patch 0014,
+package 3.5.3-15, **installed**. Not pushed.
+
 Planned next: the rest of [AMD meters for any AMD GPU](PLAN-AMD-AGNOSTIC.md)
 (APUs, older cards, card selection).
 

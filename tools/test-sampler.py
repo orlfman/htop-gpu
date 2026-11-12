@@ -554,6 +554,61 @@ def main():
         rc, err = s.close()
         check("clean exit (ASan/UBSan)", rc == 0 and not err.strip(), err.strip()[:400])
 
+        # AUDIT.md finding 15: a file that cannot be checked (EACCES) is not a file the card lacks
+        print("[access denied to the hwmon directory, then allowed again, under one running sampler]")
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.copytree(base, root, symlinks=True)
+        os.chmod(hw(root), 0o600)
+        s = Sampler(fake_bin)
+        try:
+            got = [s.sample(ms) for ms in range(100, 100 * (ABSENT_TRIES + 2), 100)]
+        finally:
+            os.chmod(hw(root), 0o755)
+        check("denied: hwmon values N/A, the rest read",
+              all(x["status"] == "active" and x["temp"] == [None] * 3 and x["sclk"] is None and x["fanMax"] is None
+                  and x["power"] is None and x["gpuBusy"] is not None and x["vramTotal"] is not None for x in got),
+              json.dumps(got[-1]))
+        d = diff(s.sample(100 * (ABSENT_TRIES + 2)), expected(root))
+        check(f"allowed again after {ABSENT_TRIES + 1} refreshes: everything read", not d, json.dumps(d))
+        rc, err = s.close()
+        check("clean exit (ASan/UBSan)", rc == 0 and not err.strip(), err.strip()[:400])
+
+        # AUDIT.md finding 16: a clock read first must not stop a failed pp_dpm_sclk from being read again
+        print("[RDNA 2: pp_dpm_sclk unreadable at first, clock readable, under one running sampler]")
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.copytree(base, root, symlinks=True)
+        rdna2(root)
+        clock = f"{hw(root)}/freq1_input"
+        dpm = f"{dev(root)}/pp_dpm_sclk"
+        write(clock, "600000000\n")
+        os.chmod(dpm, 0)
+        s = Sampler(fake_bin)
+        try:
+            got = [s.sample(ms) for ms in range(100, 100 * (ABSENT_TRIES + 2), 100)]
+        finally:
+            os.chmod(dpm, 0o644)
+        check("unreadable: the bar follows the clock", all(x["sclkPeak"] == 600 for x in got), json.dumps(got[-1]))
+        ms = 100 * (ABSENT_TRIES + 2)
+        d = diff(s.sample(ms), expected(root))
+        check("readable again: the bar goes to the top pp_dpm_sclk level (2575 MHz)", not d, json.dumps(d))
+        rc, err = s.close()
+        check("clean exit (ASan/UBSan)", rc == 0 and not err.strip(), err.strip()[:400])
+
+        print("[RDNA 2: a late pp_dpm_sclk never shrinks the bar]")
+        write(clock, "2700000000\n")
+        os.chmod(dpm, 0)
+        s = Sampler(fake_bin)
+        try:
+            first = s.sample(100)
+        finally:
+            os.chmod(dpm, 0o644)
+        write(clock, "900000000\n")
+        second = s.sample(200)
+        check("peak stays at the 2700 MHz seen, above the 2575 MHz level",
+              first["sclkPeak"] == 2700 and second["sclkPeak"] == 2700 and second["sclk"] == 900, json.dumps(second))
+        rc, err = s.close()
+        check("clean exit (ASan/UBSan)", rc == 0 and not err.strip(), err.strip()[:400])
+
         print("[RDNA 2 under one running sampler: clock bar grows from pp_dpm_sclk, video load follows gpu_metrics]")
         shutil.rmtree(root, ignore_errors=True)
         shutil.copytree(base, root, symlinks=True)

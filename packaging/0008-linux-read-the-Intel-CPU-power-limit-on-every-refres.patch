@@ -1,7 +1,7 @@
 From 6c06d2433fda370f666f286d0715c8ce0dd32534 Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 18:20:54 -0700
-Subject: [PATCH 08/13] linux: read the Intel CPU power limit on every refresh
+Subject: [PATCH 08/14] linux: read the Intel CPU power limit on every refresh
 
 The long term power limit (PL1, constraint_N_power_limit_uw) is a
 writable setting, so it can change while htop runs. It was read until it

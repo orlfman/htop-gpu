@@ -1886,3 +1886,147 @@ Installed 2026-11-11 at the user's request. `pacman -Q htop-gpu` reports
 3.5.3-14, `/usr/bin/htop-gpu` matches the package executable byte for byte and
 shows `Radeon RX 9070 XT` with all AMD meters live in a throwaway config. Stock
 `htop` 3.5.3-1.1 is untouched.
+
+
+## RDNA 2+ implementation audit (2026-11-11, Codex)
+
+Reviewed htop `f842f4863fabb061e000ac12bb21a4fd870d33f7`, outer `58b8135`
+(including `54c5ad6`), exported patches 0001–0013, and the installed 3.5.3-14
+package. Scope: Claude's new card discovery, names, VCN fallback, static-value
+retry policy, clock scaling, tests, and packaging. Two new findings remain open.
+No runtime source or tests were changed by this audit.
+
+### 15. [P2] Directory access errors become permanently missing sensors
+
+Locations: `src/htop/linux/AMDGPU.c:132-144`, `:294-307`, `:477-480`.
+
+`AMDGPU_exists()` treats every failed `access(F_OK)` as absence. A file can be
+present while `access()` fails with EACCES because an ancestor directory is not
+searchable. The new retry logic then counts this access error toward its five
+absent refreshes instead of retrying it as a failed read.
+
+Reproduction (one running ASan/UBSan sampler, copied sysfs only):
+
+1. Make the copied `hwmonN` directory mode 0600 before the first sample. Its
+   parent can still be enumerated and the directory itself exists, but reading
+   or checking any child attribute returns EACCES.
+2. Take six samples, then restore the directory to mode 0755.
+3. Temperatures, sclk, mclk and fanMax remain unavailable on subsequent samples.
+   Power resumes immediately (28 W in the probe), proving that the tree is
+   readable again. The cached zero label indices and missing fan maximum are
+   never refreshed: `access(hwmonDir, F_OK)` succeeds, so rediscovery does not run.
+4. Restarting the sampler restores all these readings. Compiling the parent
+   source (`f842f486^`) and applying the same permission sequence also restores
+   them in the original process, confirming this is a regression. Denying only
+   the fan1_max file's read permission is a passing control: that error recovers.
+
+Impact: a temporary directory access failure can leave multiple meters at N/A
+until restart or hwmon replacement, including on the RX 9070 XT. The existing
+new tests use garbage contents to represent read failure, which does not
+exercise a failed existence check.
+
+Suggested correction: preserve error reasons and distinguish a confirmed
+missing path (ENOENT) from EACCES and other failures; do not let an unconfirmed
+absence exhaust the retry window. Add the directory-permission recovery case
+under one process, alongside the existing absent/file-content cases.
+
+### 16. [P3] First clock reading prevents recovery of a failed clock scale
+
+Locations: `src/htop/linux/AMDGPU.c:429-433`, `:504-505`.
+
+On cards without the Navi 48 seed, `pp_dpm_sclk` is retried only while
+`sclkPeak` is NAN. If the first read fails but `freqN_input` is readable, the
+same refresh sets `sclkPeak` to the current clock. The next refresh skips the
+DPM read and can mark all static values complete, despite the earlier failure.
+
+Reproduction (one ASan/UBSan sampler, synthetic GC 10.3.0): set current sclk to
+600 MHz and pp_dpm_sclk's maximum to 2575 MHz, temporarily deny read permission
+on pp_dpm_sclk, then restore it immediately after sample 1. Samples 2–9 keep a
+600 MHz scale, rather than recovering to 2575 MHz. A new sampler reads 2575.
+Thus the clock bar displays full at 600 MHz and subsequently scales to whatever
+clock happens to have been observed, until restart. The MHz text stays correct.
+The RX 9070 XT's explicit 3000 MHz seed avoids this path.
+
+Suggested correction: track completion of the DPM seed read separately from
+the highest observed clock. Retry a failed DPM read and combine a recovered
+maximum with the existing peak without shrinking it. Test recovery with the
+current-clock input already readable on the first sample.
+
+### Validation and supporting evidence
+
+- Build succeeded with no warning/error diagnostics; `tools/check-style.sh`
+  reported STYLE OK. All 161 sampler and 25 heading assertions passed, including
+  the live AMD VA-API workload and sanitizer checks. Both findings above are
+  additional cases absent from those suites.
+- Independent probes accepted all nine GC entries with the ids file missing,
+  using their chip fallback names. File-level permission recovery passed;
+  directory-level recovery failed as described. The parent sampler control
+  recovered. Audit probes and parent control produced no sanitizer reports.
+- Rechecked Linux v7.3's GC family/APU switches and decimal IP sysfs attributes
+  in [amdgpu_discovery.c](https://github.com/torvalds/linux/blob/v7.3/drivers/gpu/drm/amd/amdgpu/amdgpu_discovery.c).
+  The nine accepted GC versions are consistent with its dedicated-card/APU
+  split. IP attributes expose cached discovery data.
+- Rechecked VCN attribute visibility in
+  [amdgpu_pm.c](https://github.com/torvalds/linux/blob/v7.3/drivers/gpu/drm/amd/pm/amdgpu_pm.c)
+  and the RDNA 2 activity mapping in
+  [sienna_cichlid_ppt.c](https://github.com/torvalds/linux/blob/v7.3/drivers/gpu/drm/amd/pm/swsmu/smu11/sienna_cichlid_ppt.c).
+  RDNA 2 lacks vcn_busy_percent and maps its VCN activity into average_mm_activity.
+  That driver plus smu_v13_0_0, smu_v13_0_7, and smu_v14_0_2 initialize metrics
+  v1.3. Compiling the actual v1.3 and header struct declarations from
+  [kgd_pp_interface.h](https://github.com/torvalds/linux/blob/v7.3/drivers/gpu/drm/amd/include/kgd_pp_interface.h)
+  independently confirmed size 120 and offsets 20/60/62 on this x86_64 host.
+- All 13 patch checksums match the PKGBUILD; applying the series to a fresh
+  archive of tag 3.5.3 succeeds without fuzz/offsets and reproduces all 16 changed
+  source files at HEAD byte for byte.
+- Package SHA-256 remains
+  `c41e0be5df7228ed733efab67d939159b29676fefbe1ced4ac7ffcd26f0e34fc`.
+  All five installed payload files match the archive; pacman reports zero
+  altered files. `/usr/bin/htop-gpu --version` reports `3.5.3-14-gpu`, and a live
+  capture with a throwaway config shows the card name and AMD readings.
+
+Logs, reproducible probes, cached kernel references and isolated builds are in
+ignored `test/audit-rdna2-2026-11-11/`. Only AUDIT.md, CHANGELOG.md and PLAN.md are
+changed in the tracked tree, left uncommitted. No package rebuild, installation,
+commit or push; no user config or actual sysfs permissions changed. Only the
+RX 9070 XT was checked on real hardware; other GPUs and access failures used
+synthetic trees. Real suspend, firmware differences and hotplug remain untested.
+
+
+## Resolution of findings 15 and 16 (2026-11-11, Claude Code)
+
+Claude Code (Claude Fable 5.2) reproduced both findings first, as new cases in
+`tools/test-sampler.py` run against htop `f842f486` (one running ASan/UBSan
+sampler each, copied sysfs only): both failed as the audit describes (after the
+hwmon directory became accessible again temps, sclk, mclk and fanMax stayed N/A;
+the clock scale stayed at 600 MHz instead of 2575 MHz).
+
+- **15, fixed.** `AMDGPU_exists()` became `AMDGPU_absent()`, true only when
+  `access()` fails with ENOENT. Any other failed check (EACCES, ...) counts as a
+  failed read, so it is retried on every refresh and never uses up the absent
+  window. The same test decides the VCN fallback, so `gpu_metrics` stands in for
+  `vcn_busy_percent` only when that file is confirmed missing.
+- **16, fixed.** The top `pp_dpm_sclk` level is kept in `card.sclkSeed` (NAN
+  until read) instead of being inferred from `sclkPeak`. It is read again while
+  it is NAN and the read failed, and a late value raises `sclkPeak` but never
+  lowers it. Completeness of the one-time values checks the seed, not the peak.
+
+New tests (8 checks, suite now 169): hwmon directory mode 0600 for 6 refreshes,
+then 0755, everything must be read; RDNA 2 tree with `pp_dpm_sclk` unreadable for
+6 refreshes while the clock reads 600 MHz, then readable, peak must be 2575; a
+2700 MHz clock seen before a late 2575 MHz level keeps the 2700 MHz peak.
+
+Validation: build without warnings, `STYLE OK`, `test-sampler.py` ALL PASSED
+(169, including live idle and VA-API encode), `test-headings.py` ALL PASSED (25).
+
+Released the same day at the user's request: htop `7c2fe84b` (patch 0014),
+package 3.5.3-15, SHA-256
+`bcbd15105e4e55688079187203ac47b57d649f81cc008ae765cfba7470cea077`. Patches
+0001-0013 only change their `[PATCH nn/14]` numbering; namcap gives the same
+three diagnostics. Installed with `pacman -U`: `pacman -Q` reports 3.5.3-15,
+`/usr/bin/htop-gpu` matches the package executable byte for byte and shows
+`Radeon RX 9070 XT` with all AMD meters live in a throwaway config.
+
+Limits: the suites ran on the development tree, not the packaged executable. Codex's
+own probes under `test/audit-rdna2-2026-11-11/` were not rerun. Access failures
+were only produced with permissions on synthetic trees; errors other than
+EACCES and ENOENT were not produced.

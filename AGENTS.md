@@ -8,8 +8,8 @@ to know lives in this folder, never only in one agent's private memory.
 
 A personal custom build of htop 3.5.3 with header meters for AMD dedicated cards
 (RDNA 2, 3 and 4: RX 6000, 7000 and 9000; developed and tested on an RX 9070 XT,
-the others only against fake sysfs trees; htop `f842f486`, installed as
-3.5.3-14):
+the others only against fake sysfs trees; htop `f842f486` + `7c2fe84b`, installed as
+3.5.3-15):
 GPU usage, VRAM, power, edge/junction/memory temperatures, GPU clock, VRAM clock,
 video engine. Not meant for upstream htop, but kept as close to upstream as
 possible so new htop releases are easy to rebase onto.

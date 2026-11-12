@@ -1,0 +1,120 @@
+From 7c2fe84b07755eb1743ce6d5ef5517a96ad8bdda Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Wed, 11 Nov 2026 17:59:45 -0700
+Subject: [PATCH 14/14] linux: retry AMD GPU values after access errors
+
+Two cases where a value read once was given up on although its read
+had only failed:
+
+A file counted as absent whenever access() failed. With the hwmon
+directory unsearchable for a few refreshes, every label and fan1_max
+looked absent, the absent window ran out, and temperatures, clocks and
+the fan maximum stayed unavailable after access returned. Only ENOENT
+means the card does not have the file now; any other error is a failed
+read and is tried again on every refresh. The same check decides the
+video engine fallback to gpu_metrics.
+
+On cards without a clock seed, pp_dpm_sclk was only read while
+sclkPeak was unset, and the first clock read sets sclkPeak. A failed
+first read was therefore never repeated and the clock bar kept the
+scale of the clocks seen. Keep the pp_dpm_sclk level in the card's
+sclkSeed, read it until it is there, and raise sclkPeak to it without
+ever lowering it.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ linux/AMDGPU.c | 24 +++++++++++++++---------
+ linux/AMDGPU.h |  2 +-
+ 2 files changed, 16 insertions(+), 10 deletions(-)
+
+diff --git a/linux/AMDGPU.c b/linux/AMDGPU.c
+index 41763bd9..201b25d9 100644
+--- a/linux/AMDGPU.c
++++ b/linux/AMDGPU.c
+@@ -129,17 +129,19 @@ static double AMDGPU_readNumber(const char* dir, const char* file) {
+    return (double)value;
+ }
+ 
+-static bool AMDGPU_exists(const char* dir, const char* file) {
++/* True only when the file is known not to be there; a check that fails for another reason
++   (no permission, say) tells nothing about the card */
++static bool AMDGPU_absent(const char* dir, const char* file) {
+    char path[2048];
+    xSnprintf(path, sizeof(path), "%s/%s", dir, file);
+-   return access(path, F_OK) == 0;
++   return access(path, F_OK) != 0 && errno == ENOENT;
+ }
+ 
+ /* For the values read once: a file that is there but gives no number has failed and is read
+    again, a file that is not there is something this card does not have */
+ static double AMDGPU_readStaticNumber(const char* dir, const char* file) {
+    double value = AMDGPU_readNumber(dir, file);
+-   if (isNaN(value) && AMDGPU_exists(dir, file))
++   if (isNaN(value) && !AMDGPU_absent(dir, file))
+       staticFailed = true;
+    return value;
+ }
+@@ -297,7 +299,7 @@ static unsigned int AMDGPU_findLabel(const char* type, const char* label) {
+       char buffer[32];
+       xSnprintf(file, sizeof(file), "%s%u_label", type, i);
+       if (!AMDGPU_readText(hwmonDir, file, buffer, sizeof(buffer))) {
+-         if (AMDGPU_exists(hwmonDir, file))
++         if (!AMDGPU_absent(hwmonDir, file))
+             staticFailed = true;
+          continue;
+       }
+@@ -311,7 +313,7 @@ static unsigned int AMDGPU_findLabel(const char* type, const char* label) {
+ static double AMDGPU_readDpmMax(const char* file) {
+    char buffer[512];
+    if (AMDGPU_readFile(deviceDir, file, buffer, sizeof(buffer)) <= 0) {
+-      if (AMDGPU_exists(deviceDir, file))
++      if (!AMDGPU_absent(deviceDir, file))
+          staticFailed = true;
+       return NAN;
+    }
+@@ -414,7 +416,7 @@ static void AMDGPU_init(void) {
+ /* The values read once count as read when all of them are there. A failed one is tried again on
+    every refresh, one that is absent (a card without a fan, say) only for AMDGPU_ABSENT_TRIES refreshes. */
+ static bool AMDGPU_staticComplete(void) {
+-   if (isNaN(sample.vramTotal) || isNaN(sample.sclkPeak) || isNaN(sample.mclkMax) || isNaN(sample.fanMax) || !sclkIndex || !mclkIndex)
++   if (isNaN(sample.vramTotal) || isNaN(card.sclkSeed) || isNaN(sample.mclkMax) || isNaN(sample.fanMax) || !sclkIndex || !mclkIndex)
+       return false;
+ 
+    for (size_t i = 0; i < AMDGPU_TEMP_COUNT; i++) {
+@@ -429,8 +431,12 @@ static bool AMDGPU_staticComplete(void) {
+ static bool AMDGPU_readStatic(void) {
+    sample.vramTotal = AMDGPU_readStaticNumber(deviceDir, "mem_info_vram_total") / 1024.0;
+    sample.mclkMax = AMDGPU_readDpmMax("pp_dpm_mclk");
+-   if (isNaN(sample.sclkPeak))
+-      sample.sclkPeak = AMDGPU_readDpmMax("pp_dpm_sclk");
++   /* kept apart from sclkPeak, which a clock read before this succeeds already sets */
++   if (isNaN(card.sclkSeed)) {
++      card.sclkSeed = AMDGPU_readDpmMax("pp_dpm_sclk");
++      if (!isNaN(card.sclkSeed) && !(card.sclkSeed <= sample.sclkPeak))
++         sample.sclkPeak = card.sclkSeed;
++   }
+    sample.fanMax = NAN;
+    for (size_t i = 0; i < AMDGPU_TEMP_COUNT; i++)
+       sample.tempCrit[i] = NAN;
+@@ -484,7 +490,7 @@ static void AMDGPU_refresh(void) {
+    sample.memBusy = AMDGPU_readNumber(deviceDir, "mem_busy_percent");
+    sample.vcnBusy = AMDGPU_readNumber(deviceDir, "vcn_busy_percent");
+    /* RDNA 2 cards have no vcn_busy_percent, their firmware gives the same load in gpu_metrics */
+-   bool vcnFromMetrics = isNaN(sample.vcnBusy) && !AMDGPU_exists(deviceDir, "vcn_busy_percent");
++   bool vcnFromMetrics = isNaN(sample.vcnBusy) && AMDGPU_absent(deviceDir, "vcn_busy_percent");
+    sample.vramUsed = AMDGPU_readNumber(deviceDir, "mem_info_vram_used") / 1024.0;
+ 
+    if (hwmonDir[0]) {
+diff --git a/linux/AMDGPU.h b/linux/AMDGPU.h
+index c9be6eb2..d28fab44 100644
+--- a/linux/AMDGPU.h
++++ b/linux/AMDGPU.h
+@@ -27,7 +27,7 @@ typedef struct AMDGPUCard_ {
+    uint16_t deviceId;
+    const char* name;                 /* shown by the heading meter */
+    unsigned int memRateMultiplier;   /* memory clock to data rate per pin (GDDR6: 16) */
+-   double sclkSeed;                  /* MHz, initial maximum of the GPU clock bar; NAN: the top pp_dpm_sclk level */
++   double sclkSeed;                  /* MHz, initial maximum of the GPU clock bar; NAN until the top pp_dpm_sclk level is read */
+ } AMDGPUCard;
+ 
+ /* Every value is NAN when it is not available */

@@ -4,6 +4,43 @@ Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
 
+## 2026-11-11, Claude Code (Claude Fable 5.2): fix audit findings 15 and 16
+
+- Reproduced both of Codex's findings as new `test-sampler.py` cases against
+  `f842f486`, then fixed them in `linux/AMDGPU.c`: 15, only ENOENT counts as
+  "the card does not have this"; other access errors are failed reads and are
+  retried. 16, the `pp_dpm_sclk` level is tracked in `card.sclkSeed`, retried
+  after a failed read, and merged into `sclkPeak` without lowering it.
+- Build without warnings, `STYLE OK`, `test-sampler.py` ALL PASSED (169 checks),
+  `test-headings.py` ALL PASSED. Details in AUDIT.md.
+- Committed, packaged and installed at the user's request: htop `7c2fe84b`
+  (`linux: retry AMD GPU values after access errors`, a new commit, not squashed
+  into `f842f486`), patch 0014, pkgrel 15. Installed `/usr/bin/htop-gpu` is
+  byte-identical to the package's and shows the AMD meters live. The outer
+  commit also carries Codex's uncommitted audit records.
+- Not pushed (not asked for). Next: push when the user says so; then the rest
+  of PLAN-AMD-AGNOSTIC.md.
+
+## 2026-11-11, Codex: audit Claude's RDNA 2+ implementation
+
+- Audited htop `f842f486`, outer `58b8135`, patches 0001–0013 and installed
+  3.5.3-14. Two findings, both reproduced: 15 (P2), temporary sensor-directory
+  access errors can permanently disable cached sensors; 16 (P3), a failed
+  initial pp_dpm_sclk read is never retried once a current clock is available.
+  Details, suggested corrections and reproductions are in AUDIT.md. No fixes
+  applied; both findings remain open.
+- Build/style, all 161 sampler and 25 heading assertions passed. Independent
+  permission probes expose the two missing cases; the previous sampler recovers
+  from the directory failure. Kernel-source checks support the GC table and
+  VCN fallback; compiled kernel structs confirm metrics size/offsets.
+- All patch checksums and their application verified; all 16 changed source
+  files match HEAD. All five installed payload files match the archive, pacman
+  reports zero altered files, and installed AMD meters display live.
+- Only the three audit/status records changed, left uncommitted. Logs and probes
+  are ignored under `test/audit-rdna2-2026-11-11/`. No source changes, rebuild of
+  the package, installation, commit or push. Real non-9070-XT cards and suspend
+  remain testing limits. Next: resolve findings 15 and 16.
+
 ## 2026-11-11, Claude Code (Claude Fable 5.2): AMD meters on RDNA 2+ dedicated cards
 
 Implements [PLAN-AMD-DGPU.md](PLAN-AMD-DGPU.md) at the user's request. All htop
