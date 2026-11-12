@@ -6,7 +6,10 @@ to know lives in this folder, never only in one agent's private memory.
 
 ## What this is
 
-A personal custom build of htop 3.5.3 with header meters for an AMD RX 9070 XT:
+A personal custom build of htop 3.5.3 with header meters for AMD dedicated cards
+(RDNA 2, 3 and 4: RX 6000, 7000 and 9000; developed and tested on an RX 9070 XT,
+the others only against fake sysfs trees; htop `f842f486`, package 3.5.3-14,
+while the installed 3.5.3-13 still knows only the RX 9070 XT):
 GPU usage, VRAM, power, edge/junction/memory temperatures, GPU clock, VRAM clock,
 video engine. Not meant for upstream htop, but kept as close to upstream as
 possible so new htop releases are easy to rebase onto.
@@ -151,7 +154,10 @@ mesa (VA-API on the 9070 XT).
 
 ## Machine facts
 
-- The 9070 XT is PCI `0000:04:00.0`, ID `1002:7550`. `cardN` and `hwmonN` numbers
+- The 9070 XT is PCI `0000:04:00.0`, ID `1002:7550` revision `c0`, graphics core
+  (GC) 12.0.1 in `ip_discovery`. Cards are recognized by GC version, and named
+  from `/usr/share/libdrm/amdgpu.ids`; the sampler test builds with its own ids
+  file (`build-sampler.sh` third argument), the htop builds use the system one. `cardN` and `hwmonN` numbers
   change between boots, so code never hardcodes them. `tools/test-sampler.py`
   does assume `0000:04:00.0` for now.
 - `/dev/dri/renderD128` is the Intel iGPU. VA-API work on the 9070 XT must use

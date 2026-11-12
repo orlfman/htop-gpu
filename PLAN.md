@@ -45,9 +45,18 @@ match the source. Finding 14 (P3) is fixed in the heading test, which passes all
 25 checks with `NO_COLOR` set or unset. Build, style, and AMD sampler checks
 also passed after the fix. See AUDIT.md for evidence and limits.
 
-Planned next: [AMD meters on RDNA 2+ dedicated cards](PLAN-AMD-DGPU.md)
-(investigated 2026-10-29, not started), the first part of
-[AMD meters for any AMD GPU](PLAN-AMD-AGNOSTIC.md).
+Local package rebuilt and verified (2026-11-10, Codex) at
+`packaging/builds/cc2f286/htop-gpu-3.5.3-13-x86_64.pkg.tar.zst`.
+Its executable matches the installed 3.5.3-13 build. See AUDIT.md for checks.
+
+[AMD meters on RDNA 2+ dedicated cards](PLAN-AMD-DGPU.md): done 2026-11-11
+(Claude Code). htop `f842f486`, patch 0013, package 3.5.3-14 built and checked at
+`packaging/htop-gpu-3.5.3-14-x86_64.pkg.tar.zst`, **not installed** (the installed
+build is still 3.5.3-13) and not pushed. See the CHANGELOG entry for what differs
+from the plan, AUDIT.md for the package checks.
+
+Planned next: the rest of [AMD meters for any AMD GPU](PLAN-AMD-AGNOSTIC.md)
+(APUs, older cards, card selection).
 
 In progress: nobody.
 

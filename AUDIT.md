@@ -1836,3 +1836,48 @@ Validation used htop source `798d8cfa`. Only the heading test and project record
 were edited. The checks covered the development binary and the heading suite's
 fake states. No package rebuild or installation, real suspend, or hardware
 hotplug was tested.
+
+
+## Local package verification (2026-11-10)
+
+Codex rebuilt `htop-gpu 3.5.3-13` for x86_64 at the user's request from outer
+commit `cc2f286` and the existing PKGBUILD. makepkg verified the cached upstream
+3.5.3 source and all 12 patch checksums. The output is
+`packaging/builds/cc2f286/htop-gpu-3.5.3-13-x86_64.pkg.tar.zst`.
+The archive SHA-256 is
+`c63b0afc1d0eeee6a5fa18d7c0fe17da2a70b2e27480b9579ca90d4df0be4670`.
+
+- Pacman read the archive and resolved it in print-only mode. Its five installed
+  files do not collide with the stock htop package's files.
+- The extracted executable reported `3.5.3-13-gpu`, matched the installed
+  executable byte for byte, and displayed the CPU, AMD GPU, and Intel iGPU
+  headings in a throwaway terminal config. All 33 configuration path checks passed.
+- namcap diagnostics matched the previous 3.5.3-13 archive. The existing
+  hicolor-icon-theme diagnostic refers to a dependency already installed here.
+  The other diagnostics concern implicit glibc and possibly unnecessary libnl.
+
+No new findings. Logs are under ignored `test/package-cc2f286/`. This check
+used the extracted executable and a read-only pacman transaction. It did not
+perform an installation, replace the earlier archive, or test another host.
+
+
+## Package 3.5.3-14 check (2026-11-11)
+
+Claude Code (Claude Fable 5.2) built `htop-gpu 3.5.3-14` with `makepkg -fC` from
+htop `f842f486` (patch 0013, RDNA 2+ dedicated cards) after the source checks in
+the CHANGELOG entry of the same date (build without warnings, `STYLE OK`,
+`test-sampler.py` 161 checks and `test-headings.py` 25 checks, both ALL PASSED
+on the development tree before the commit). Archive SHA-256:
+`c41e0be5df7228ed733efab67d939159b29676fefbe1ced4ac7ffcd26f0e34fc`.
+
+- Patches 0001-0012 differ from 3.5.3-13 only in their `[PATCH nn/13]` subject
+  numbering.
+- The extracted executable reports `3.5.3-14-gpu`, contains the `amdgpu.ids`
+  path, and shows `Radeon RX 9070 XT` with all AMD meters live in a throwaway
+  config. The archive holds the same five `htop-gpu` files as before.
+- namcap reports the same three diagnostics as 3.5.3-13 (hicolor-icon-theme,
+  implicit glibc, possibly unnecessary libnl).
+
+No new findings. Limits: the test suites ran on the development tree, not on
+the packaged executable; no installation; no real RDNA 2/3 or Navi 44 card (fake
+trees only); the config path suite was not rerun (`Settings.c` untouched).

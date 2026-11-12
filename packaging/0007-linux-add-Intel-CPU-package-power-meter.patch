@@ -1,7 +1,7 @@
 From 363370bdb3e87ca966224dfb08a3b5a56eaf29f8 Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 17:57:16 -0700
-Subject: [PATCH 07/12] linux: add Intel CPU package power meter
+Subject: [PATCH 07/13] linux: add Intel CPU package power meter
 
 Add IntelCPUPower ("CPU:61.3W limit:250W"): the CPU package power from
 the Intel RAPL powercap energy counters, against the long term (PL1)

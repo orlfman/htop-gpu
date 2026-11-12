@@ -4,6 +4,73 @@ Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
 
+## 2026-11-11, Claude Code (Claude Fable 5.2): AMD meters on RDNA 2+ dedicated cards
+
+Implements [PLAN-AMD-DGPU.md](PLAN-AMD-DGPU.md) at the user's request. All htop
+changes are in `linux/AMDGPU.c` (+ two comments in `AMDGPU.h`); the meter file and
+upstream files are untouched.
+
+- Cards are recognized by graphics core (GC) version from
+  `ip_discovery/die/0/GC/0/{major,minor,revision}` instead of PCI device ID
+  `0x7550`: Navi 21/22/23/24, 31/32/33, 44/48. APU, RDNA 1 and unknown GC
+  versions, and devices without `ip_discovery`, stay "not found" (N/A). The
+  lowest PCI address among matching cards still wins.
+- Name: looked up by device ID + revision in libdrm's
+  `/usr/share/libdrm/amdgpu.ids` (compile-time `AMDGPU_IDS_FILE`), leading "AMD "
+  dropped, so this card still reads `Radeon RX 9070 XT`. No match or no file:
+  `Radeon <chip>`, e.g. `Radeon Navi 44`. This replaces the name list the plan had.
+- Video engine: `vcn_busy_percent` when the file exists, else
+  `average_mm_activity` (gpu_metrics v1.3 offset 20) for RDNA 2. Checked every
+  refresh rather than once (differs from the plan: nothing to go stale). A file
+  that exists but is unreadable gives N/A, not the fallback.
+- GPU clock bar: GC 12.0.1 keeps its 3000 MHz seed; other chips start at the top
+  `pp_dpm_sclk` level (or the first clock read if that file is absent) and grow.
+- One-time values: present-but-unreadable is retried on every refresh as before;
+  absent (ENOENT, label not found) is looked for on 5 refreshes
+  (`AMDGPU_ABSENT_TRIES`), then the card counts as not having it until the card
+  is rediscovered or hwmon is replaced. The plan said "not retried"; the existing
+  finding 4 recovery tests need the second refresh to pick up a late file, so a
+  short window was kept and those tests pass unchanged.
+- Tools: `build-sampler.sh` takes an ids file as third argument;
+  `fake-sysfs.py` has `--gc MAJOR.MINOR.REV` and `--no-vcn-busy`; the snapshot now
+  copies `revision`, `pp_dpm_sclk` and the GC version files.
+- Tests (`test-sampler.py`, now 161 checks): RDNA 2 (RX 6800 XT, video
+  load from gpu_metrics, unset, wrong metrics revision), RDNA 3, a card without
+  an ids name, name by revision, ids edge lines, APU/RDNA 1/unknown/garbage GC,
+  no `ip_discovery`, integrated graphics at a lower PCI address than the card,
+  no `pp_dpm_sclk`; under one running sampler: absent vs failed `fan1_max`
+  (garbage for 10 refreshes then fixed, absent then present within and after the
+  window, re-check after hwmon renumbering) and an RDNA 2 clock bar / video load
+  sequence. Two old cases changed meaning and were replaced: "unsupported device
+  id" (a device ID alone no longer excludes a card) and the second card in
+  "lowest supported PCI address wins" (now an APU GC).
+- Checks: build without warnings, `STYLE OK`, `test-sampler.py` ALL PASSED
+  (ASan/UBSan, live idle + VA-API encode), `test-headings.py` ALL PASSED (25).
+  Header captured live on the dev binary (unchanged for this card) and from a
+  fake RX 6800 XT tree (name, VCN and clocks shown).
+- Limits: only the RX 9070 XT is real here. RDNA 2/3 and Navi 44 behavior rests on
+  the kernel-source investigation in the plan plus fake trees; the GC table was
+  not re-checked against kernel source today. No negative-control (mutation) run
+  of the new tests.
+- Committed and packaged the same day at the user's request: htop `f842f486`
+  (`linux: support RDNA 2 and newer AMD dedicated cards`), patch 0013 (0001-0012
+  only change their numbering), PKGBUILD pkgrel 14 with a new description and
+  `libdrm` as optional dependency (card names). `makepkg -fC` built
+  `packaging/htop-gpu-3.5.3-14-x86_64.pkg.tar.zst`; checks are in AUDIT.md. The
+  outer commit also carries Codex's uncommitted 2026-11-10 record edits.
+- Not installed, not pushed (neither was asked for).
+- Next: install 3.5.3-14 and push when the user says so; then the rest of
+  PLAN-AMD-AGNOSTIC.md.
+
+## 2026-11-10, Codex: rebuild the local install package
+
+- Built `htop-gpu 3.5.3-13` from `cc2f286` into
+  `packaging/builds/cc2f286/`. Source checksums, pacman package resolution, stock
+  file compatibility, live headings, and all 33 config checks passed. The
+  packaged executable is identical to the installed one.
+- The package is ready for manual installation. Validation is in AUDIT.md.
+  The package and logs are ignored. The project records are uncommitted.
+
 ## 2026-11-10, Codex: fix heading color-test isolation
 
 - Fixed finding 14 by removing `NO_COLOR` only from the heading test's capture

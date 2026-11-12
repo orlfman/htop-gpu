@@ -2,7 +2,8 @@
 """Tests for src/htop/linux/AMDGPU.c through the amdgpu-sample driver.
 
 1. snapshot: copy the 9070 XT's sysfs files into a fake tree and check every value exactly
-2. faults: modified copies of that tree (suspended card, missing or garbage files, other cards)
+2. faults: modified copies of that tree (suspended card, missing or garbage files, other cards,
+   RDNA 2 and RDNA 3 cards, integrated graphics, cards without a fan)
 3. cache: a monotonicMs that is not newer never re-reads sysfs
 4. live: the real /sys at idle, then during a VA-API encode on the 9070 XT
 
@@ -19,7 +20,9 @@ PCI = "0000:04:00.0"
 REAL_DEV = f"/sys/bus/pci/devices/{PCI}"
 RENDER = f"/dev/dri/by-path/pci-{PCI}-render"
 
-DEVICE_FILES = ["vendor", "device", "gpu_busy_percent", "mem_busy_percent", "vcn_busy_percent",
+GC_DIR = "ip_discovery/die/0/GC/0"
+DEVICE_FILES = ["vendor", "device", "revision", f"{GC_DIR}/major", f"{GC_DIR}/minor", f"{GC_DIR}/revision",
+                "pp_dpm_sclk", "gpu_busy_percent", "mem_busy_percent", "vcn_busy_percent",
                 "mem_info_vram_used", "mem_info_vram_total", "pp_dpm_mclk", "gpu_metrics",
                 "power/runtime_status"]
 HWMON_PREFIXES = ("name", "power1_", "temp", "freq", "fan1_")
@@ -28,6 +31,30 @@ DYNAMIC = ["gpuBusy", "memBusy", "vcnBusy", "vramUsed", "power", "powerCap", "sc
 LABELS = ["edge", "junction", "mem"]
 SCLK_SEED = 3000.0
 MEM_RATE_MULTIPLIER = 16
+ABSENT_TRIES = 5
+
+# graphics core version -> (chip, GPU clock seed; None = top pp_dpm_sclk level)
+CHIPS = {(10, 3, 0): ("Navi 21", None), (10, 3, 2): ("Navi 22", None), (10, 3, 4): ("Navi 23", None),
+         (10, 3, 5): ("Navi 24", None), (11, 0, 0): ("Navi 31", None), (11, 0, 2): ("Navi 33", None),
+         (11, 0, 3): ("Navi 32", None), (12, 0, 0): ("Navi 44", None), (12, 0, 1): ("Navi 48", SCLK_SEED)}
+# the fake binary's own amdgpu.ids, with the kinds of lines libdrm's file has
+IDS_TEXT = """# List of AMDGPU IDs
+#
+# Syntax:
+# device_id,	revision_id,	product_name        <-- single tab after comma
+
+1.0.0
+73BF,	C0,	AMD Radeon RX 6900 XT
+73BF,	C1,	AMD Radeon RX 6800 XT
+744C,	C8,	AMD Radeon RX 7900 XTX
+7550,	C3,	AMD Radeon RX 9070
+7550,	C0,	AMD Radeon RX 9070 XT  \r
+7551,	C0,	Radeon Without Prefix
+7552,	C0,
+"""
+IDS = {(0x73BF, 0xC0): "Radeon RX 6900 XT", (0x73BF, 0xC1): "Radeon RX 6800 XT",
+       (0x744C, 0xC8): "Radeon RX 7900 XTX", (0x7550, 0xC3): "Radeon RX 9070",
+       (0x7550, 0xC0): "Radeon RX 9070 XT", (0x7551, 0xC0): "Radeon Without Prefix"}
 
 failures = []
 
@@ -63,6 +90,11 @@ def snapshot(root):
         open(f"{drv}/{f}", "w").close()
     os.makedirs(f"{root}/module/amdgpu")
     os.symlink("../../../module/amdgpu", f"{drv}/module")
+
+
+def set_gc(dev, major, minor, revision):
+    for name, value in (("major", major), ("minor", minor), ("revision", revision)):
+        write(f"{dev}/{GC_DIR}/{name}", f"{value}\n")
 
 
 def hwmon_dir(dev):
@@ -105,17 +137,29 @@ def expected(root, pci=PCI):
             return None
         return scaled(f"{hw}/{kind}{idx[label]}_{item}", div)
 
-    try:
-        mclk_levels = [float(line.split(":")[1].strip().split("M")[0])
-                       for line in open(f"{dev}/pp_dpm_mclk") if ":" in line]
-    except OSError:
-        mclk_levels = []
+    def dpm_max(name):
+        try:
+            levels = [float(line.split(":")[1].strip().split("M")[0])
+                      for line in open(f"{dev}/{name}") if ":" in line]
+        except OSError:
+            levels = []
+        return max(levels) if levels else None
+
+    def hexfile(name):
+        try:
+            return int(open(f"{dev}/{name}").read().strip(), 16)
+        except (OSError, ValueError):
+            return 0
+
+    chip, seed = CHIPS[tuple(num(f"{dev}/{GC_DIR}/{f}") for f in ("major", "minor", "revision"))]
+    awake_seed = seed if seed is not None else dpm_max("pp_dpm_sclk")
     vram_total = scaled(f"{dev}/mem_info_vram_total", 1024)
     e = {
-        "status": "active", "card": "Radeon RX 9070 XT", "pci": pci,
-        "vramTotal": vram_total, "mclkMax": max(mclk_levels) if mclk_levels else None,
+        "status": "active", "pci": pci,
+        "card": IDS.get((hexfile("device"), hexfile("revision")), f"Radeon {chip}"),
+        "vramTotal": vram_total, "mclkMax": dpm_max("pp_dpm_mclk"),
         "tempCrit": [hwval("temp", temp_idx, lbl, "crit", 1000) for lbl in LABELS],
-        "temp": [None] * 3, "sclkPeak": SCLK_SEED,
+        "temp": [None] * 3, "sclkPeak": awake_seed,
         "fanMax": scaled(f"{hw}/fan1_max", 1) if hw else None,
     }
     for k in DYNAMIC:
@@ -126,7 +170,8 @@ def expected(root, pci=PCI):
         status = None
     if status == "suspended":
         # nothing is read from a sleeping card, not even the values that never change
-        e.update(status="suspended", vramTotal=None, mclkMax=None, tempCrit=[None] * 3, fanMax=None)
+        e.update(status="suspended", vramTotal=None, mclkMax=None, tempCrit=[None] * 3, fanMax=None,
+                 sclkPeak=seed)
         return e
 
     e["gpuBusy"] = num(f"{dev}/gpu_busy_percent")
@@ -143,7 +188,7 @@ def expected(root, pci=PCI):
     e["sclk"] = hwval("freq", freq_idx, "sclk", "input", 1e6)
     e["mclk"] = hwval("freq", freq_idx, "mclk", "input", 1e6)
     if e["sclk"] is not None:
-        e["sclkPeak"] = max(SCLK_SEED, e["sclk"])
+        e["sclkPeak"] = e["sclk"] if awake_seed is None else max(awake_seed, e["sclk"])
     if e["mclk"] is not None:
         e["memRate"] = e["mclk"] * MEM_RATE_MULTIPLIER / 1000
     try:
@@ -151,6 +196,9 @@ def expected(root, pci=PCI):
         if (m["structure_size"], m["format_revision"], m["content_revision"]) == (120, 1, 3):
             e["vclk"] = None if m["current_vclk0"] == 0xFFFF else m["current_vclk0"]
             e["dclk"] = None if m["current_dclk0"] == 0xFFFF else m["current_dclk0"]
+            # only a card without the file (RDNA 2) takes the video engine load from gpu_metrics
+            if not os.path.lexists(f"{dev}/vcn_busy_percent"):
+                e["vcnBusy"] = None if m["average_mm_activity"] == 0xFFFF else m["average_mm_activity"]
     except Exception:  # missing, truncated or unparsable table
         pass
     return e
@@ -224,7 +272,8 @@ def main():
         live_bin, fake_bin = f"{tmp}/sample-live", f"{tmp}/sample-fake"
         build = os.path.join(HERE, "build-sampler.sh")
         subprocess.run([build, live_bin, "/sys"], check=True)
-        subprocess.run([build, fake_bin, root], check=True)
+        write(f"{tmp}/amdgpu.ids", IDS_TEXT)
+        subprocess.run([build, fake_bin, root, f"{tmp}/amdgpu.ids"], check=True)
         snapshot(base)
 
         def dev(r):
@@ -259,11 +308,32 @@ def main():
 
         def two_cards(r):
             drv = f"{r}/bus/pci/drivers/amdgpu"
-            for addr, devid, busy in (("0000:03:00.0", "0x7550", "77"), ("0000:02:00.0", "0x744c", "66")):
+            # 02:00.0 is integrated graphics (an APU's graphics core), 03:00.0 a second dedicated card
+            for addr, devid, gc, busy in (("0000:03:00.0", "0x7550", (12, 0, 1), "77"),
+                                          ("0000:02:00.0", "0x1681", (10, 3, 6), "66")):
                 shutil.copytree(dev(r), f"{r}/bus/pci/devices/{addr}", symlinks=True)
                 write(f"{r}/bus/pci/devices/{addr}/device", devid + "\n")
                 write(f"{r}/bus/pci/devices/{addr}/gpu_busy_percent", busy + "\n")
+                set_gc(f"{r}/bus/pci/devices/{addr}", *gc)
                 os.symlink(f"../../devices/{addr}", f"{drv}/{addr}")
+
+        def other_card(devid, revision, gc, sclk_levels, vcn_file=True, mm_activity=None):
+            def f(r):
+                write(f"{dev(r)}/device", devid + "\n")
+                write(f"{dev(r)}/revision", revision + "\n")
+                set_gc(dev(r), *gc)
+                if sclk_levels is None:
+                    os.remove(f"{dev(r)}/pp_dpm_sclk")
+                else:
+                    write(f"{dev(r)}/pp_dpm_sclk",
+                          "".join(f"{i}: {mhz}Mhz {'*' if i == 0 else ''}\n" for i, mhz in enumerate(sclk_levels)))
+                if not vcn_file:
+                    os.remove(f"{dev(r)}/vcn_busy_percent")
+                if mm_activity is not None:
+                    metrics_patch(20, mm_activity)(r)
+            return f
+
+        rdna2 = other_card("0x73bf", "0xc1", (10, 3, 0), [500, 2575], vcn_file=False, mm_activity=b"\x25\x00")
 
         cases = [
             ("suspended card: nothing read",
@@ -283,9 +353,33 @@ def main():
             ("fan spinning", lambda r: write(f"{hw(r)}/fan1_input", "1193\n"), expected),
             ("fan1_input missing", lambda r: os.remove(f"{hw(r)}/fan1_input"), expected),
             ("fan1_max missing", lambda r: os.remove(f"{hw(r)}/fan1_max"), expected),
-            ("lowest supported PCI address wins", two_cards, lambda r: expected(r, "0000:03:00.0")),
-            ("unsupported device id",
-             lambda r: write(f"{dev(r)}/device", "0x7551\n"), lambda r: not_found()),
+            ("lowest dedicated card's PCI address wins, integrated graphics skipped",
+             two_cards, lambda r: expected(r, "0000:03:00.0")),
+            ("RDNA 2 (RX 6800 XT): video load from gpu_metrics, clock bar from pp_dpm_sclk", rdna2, expected),
+            ("RDNA 2: video load unset in gpu_metrics",
+             other_card("0x73bf", "0xc0", (10, 3, 0), [500, 2575], vcn_file=False, mm_activity=b"\xff\xff"), expected),
+            ("RDNA 2: gpu_metrics of another revision, no video load",
+             lambda r: (rdna2(r), metrics_patch(3, b"\x04")(r)), expected),
+            ("RDNA 3 (RX 7900 XTX)", other_card("0x744c", "0xc8", (11, 0, 0), [500, 2695]), expected),
+            ("RDNA 4 (RX 9060 XT) without a name in amdgpu.ids: named after the chip",
+             other_card("0x7590", "0xc0", (12, 0, 0), [500, 2400]), expected),
+            ("no pp_dpm_sclk: clock bar starts at the first clock read",
+             other_card("0x744c", "0xc8", (11, 0, 0), None), expected),
+            ("garbage in vcn_busy_percent: no fallback to gpu_metrics",
+             lambda r: write(f"{dev(r)}/vcn_busy_percent", "abc\n"), expected),
+            ("other revision of the device: its own name",
+             lambda r: write(f"{dev(r)}/revision", "0xc3\n"), expected),
+            ("unknown revision: named after the chip", lambda r: write(f"{dev(r)}/revision", "0xff\n"), expected),
+            ("no revision file: named after the chip", lambda r: os.remove(f"{dev(r)}/revision"), expected),
+            ("amdgpu.ids name without the AMD prefix", lambda r: write(f"{dev(r)}/device", "0x7551\n"), expected),
+            ("amdgpu.ids line with an empty name: named after the chip",
+             lambda r: write(f"{dev(r)}/device", "0x7552\n"), expected),
+            ("integrated graphics (APU graphics core)", lambda r: set_gc(dev(r), 10, 3, 6), lambda r: not_found()),
+            ("RDNA 1 graphics core", lambda r: set_gc(dev(r), 10, 1, 10), lambda r: not_found()),
+            ("unknown graphics core", lambda r: set_gc(dev(r), 13, 0, 0), lambda r: not_found()),
+            ("garbage graphics core version",
+             lambda r: write(f"{dev(r)}/{GC_DIR}/minor", "abc\n"), lambda r: not_found()),
+            ("no ip_discovery", lambda r: shutil.rmtree(f"{dev(r)}/ip_discovery"), lambda r: not_found()),
             ("non-AMD vendor", lambda r: write(f"{dev(r)}/vendor", "0x1022\n"), lambda r: not_found()),
             ("not bound to amdgpu",
              lambda r: os.remove(f"{r}/bus/pci/drivers/amdgpu/{PCI}"), lambda r: not_found()),
@@ -409,6 +503,79 @@ def main():
                     "hwmon/*/temp3_label", "hwmon/*/freq1_label", "hwmon/*/freq2_label"):
             recovery(f"{rel} missing at start, appears later",
                      lambda r, rel=rel: (fan_spinning(r), hide(rel)(r)), unhide, expected)
+
+        # A value the card does not have (file absent) stops being looked for; one that fails
+        # to read (file there, no number) never does
+        print("[absent or failed: fan1_max under one running sampler]")
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.copytree(base, root, symlinks=True)
+        fan_max = f"{hw(root)}/fan1_max"
+        real_max = open(fan_max).read()
+        write(fan_max, "abc\n")
+        s = Sampler(fake_bin)
+        d = [diff(s.sample(ms), expected(root)) for ms in range(100, 100 * (ABSENT_TRIES + 6), 100)]
+        check("garbage: N/A, everything else read", not any(d), json.dumps(d))
+        write(fan_max, real_max)
+        ms = 100 * (ABSENT_TRIES + 6)
+        d = diff(s.sample(ms), expected(root))
+        check(f"garbage fixed after {ABSENT_TRIES + 5} refreshes: read", not d, json.dumps(d))
+        os.remove(fan_max)
+        renumber_hwmon(root)
+        fan_max = f"{hw(root)}/fan1_max"
+        for i in range(ABSENT_TRIES - 1):
+            ms += 100
+            d = diff(s.sample(ms), expected(root))
+            check(f"absent, refresh {i + 1}: N/A, everything else read", not d, json.dumps(d))
+        write(fan_max, real_max)
+        ms += 100
+        d = diff(s.sample(ms), expected(root))
+        check(f"appears on refresh {ABSENT_TRIES}: read", not d, json.dumps(d))
+        os.remove(fan_max)
+        renumber_hwmon2 = os.path.join(os.path.dirname(hw(root)), "hwmon98")
+        os.rename(hw(root), renumber_hwmon2)
+        fan_max = f"{renumber_hwmon2}/fan1_max"
+        for i in range(ABSENT_TRIES + 3):
+            ms += 100
+            d = diff(s.sample(ms), expected(root))
+            check(f"absent again, refresh {i + 1}: N/A, everything else read", not d, json.dumps(d))
+        write(fan_max, real_max)
+        write(f"{dev(root)}/gpu_busy_percent", "42\n")
+        ms += 100
+        want = expected(root)
+        want["fanMax"] = None
+        got = s.sample(ms)
+        d = diff(got, want)
+        check(f"appears after {ABSENT_TRIES} refreshes: no longer looked for, the rest still live",
+              not d and got["gpuBusy"] == 42, json.dumps(d))
+        os.rename(renumber_hwmon2, os.path.join(os.path.dirname(renumber_hwmon2), "hwmon97"))
+        ms += 100
+        d = diff(s.sample(ms), expected(root))
+        check("hwmon renumbered: looked for again and read", not d, json.dumps(d))
+        rc, err = s.close()
+        check("clean exit (ASan/UBSan)", rc == 0 and not err.strip(), err.strip()[:400])
+
+        print("[RDNA 2 under one running sampler: clock bar grows from pp_dpm_sclk, video load follows gpu_metrics]")
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.copytree(base, root, symlinks=True)
+        rdna2(root)
+        clock = f"{hw(root)}/freq1_input"
+        s = Sampler(fake_bin)
+        peak = 2575.0
+        for ms, mhz, activity in ((100, 600, 0), (200, 2700, 81), (300, 900, 12)):
+            write(clock, f"{mhz * 1000000}\n")
+            metrics_patch(20, bytes([activity, 0]))(root)
+            peak = max(peak, mhz)
+            got = s.sample(ms)
+            want = expected(root)
+            want["sclkPeak"] = peak
+            d = diff(got, want)
+            check(f"{mhz} MHz, video {activity}%: peak {peak:g} MHz", not d and got["vcnBusy"] == activity,
+                  json.dumps(d))
+        write(f"{dev(root)}/vcn_busy_percent", "55\n")
+        got = s.sample(400)
+        check("vcn_busy_percent appears: used instead", got["vcnBusy"] == 55, json.dumps(got))
+        rc, err = s.close()
+        check("clean exit (ASan/UBSan)", rc == 0 and not err.strip(), err.strip()[:400])
 
         # ----- 4. live -----
         print("[live /sys: idle plausibility]")

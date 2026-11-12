@@ -55,7 +55,7 @@ All of them work like normal htop meters. You add them in F2 Setup and can show 
 
 ## Will it work on my computer?
 
-Probably not as is, unless you have the same hardware. The AMD meters look for the RX 9070 XT specifically, and the iGPU meters look for the Arrow Lake iGPU (PCI ID 8086:7d67). Other cards will just show N/A. Adding another card mostly means adding it to a small table in the code and checking the numbers, but I've only tested what I own.
+Partly. The AMD meters should work on any dedicated RX 6000, RX 7000 or RX 9000 card (RDNA 2, 3 and 4, and their Radeon Pro versions), and the heading shows that card's name. I only own an RX 9070 XT though, so the other cards are tested against made up copies of what the kernel driver reports, not on real hardware. If you try it on one, I'd like to hear how it goes. Integrated Radeon graphics and older cards show N/A. The iGPU meters look for the Arrow Lake iGPU (PCI ID 8086:7d67) specifically.
 
 The CPU power meter needs to read the RAPL energy counter, which Linux keeps root only by default. I made mine readable with this udev rule in `/etc/udev/rules.d/99-rapl-read.rules`:
 

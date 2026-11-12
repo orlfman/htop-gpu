@@ -1,6 +1,19 @@
 # htop-gpu: AMD meters on RDNA 2 and newer dedicated cards (plan)
 
-Status (2026-10-29): investigated, nothing implemented. Written by Claude Code.
+Status (2026-11-11): implemented and tested by Claude Code, htop `f842f486`,
+packaged as 3.5.3-14 (not installed). Three things differ from the plan below; the CHANGELOG entry of
+2026-11-11 has the details:
+
+- Card names come from libdrm's `/usr/share/libdrm/amdgpu.ids` (PCI device ID +
+  revision, "AMD " dropped), so no name list is kept in the code. Without a match
+  the name is `Radeon` + chip (`Radeon Navi 21`).
+- The VCN fallback is decided on every refresh (file absent → `gpu_metrics`),
+  not once at discovery, so there is no state to go stale.
+- Absent one-time values are looked for on 5 refreshes before the card counts as
+  not having them (not zero), because the existing recovery tests require a file
+  that shows up on the second refresh to be read.
+
+Investigated 2026-10-29. Written by Claude Code.
 Goal: the AMD meters work on every RDNA 2, RDNA 3 and RDNA 4 dedicated card
 (RX 6000, RX 7000, RX 9000 and their Radeon Pro versions), not only the
 RX 9070 XT, still without opening DRM device nodes or waking a sleeping GPU.

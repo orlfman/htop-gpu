@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Build a fake sysfs tree from the 9070 XT's real files, for htop-fake (see build-htop-fake.sh).
 
-Usage: python3 -I fake-sysfs.py <root> [--suspended] [--unbind] [--remove PATH ...] [--write PATH=VALUE ...]
+Usage: python3 -I fake-sysfs.py <root> [--suspended] [--unbind] [--gc MAJOR.MINOR.REV] [--no-vcn-busy]
+                                  [--remove PATH ...] [--write PATH=VALUE ...]
+--gc sets the graphics core version the card is recognized by (10.3.0 = Navi 21, an RX 6800/6900);
+--no-vcn-busy removes vcn_busy_percent, as on RDNA 2 cards.
 PATH is relative to the card's device dir and may use globs, e.g. 'hwmon/*/power1_cap'.
 The tree is rebuilt from scratch on every run.
 """
@@ -19,6 +22,8 @@ def main():
     p.add_argument("root")
     p.add_argument("--suspended", action="store_true", help="card reports runtime_status suspended")
     p.add_argument("--unbind", action="store_true", help="card not bound to amdgpu (meters: N/A)")
+    p.add_argument("--gc", metavar="MAJOR.MINOR.REV", help="graphics core version in ip_discovery")
+    p.add_argument("--no-vcn-busy", action="store_true", help="no vcn_busy_percent file (RDNA 2)")
     p.add_argument("--remove", nargs="+", default=[], metavar="PATH")
     p.add_argument("--write", nargs="+", default=[], metavar="PATH=VALUE")
     args = p.parse_args()
@@ -32,6 +37,10 @@ def main():
         test_sampler.write(f"{dev}/power/runtime_status", "suspended\n")
     if args.unbind:
         os.remove(f"{root}/bus/pci/drivers/amdgpu/{test_sampler.PCI}")
+    if args.gc:
+        test_sampler.set_gc(dev, *args.gc.split("."))
+    if args.no_vcn_busy:
+        os.remove(f"{dev}/vcn_busy_percent")
     for pattern in args.remove:
         matches = glob.glob(f"{dev}/{pattern}")
         if not matches:
