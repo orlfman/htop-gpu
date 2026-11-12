@@ -52,7 +52,7 @@ Its executable matches the installed 3.5.3-13 build. See AUDIT.md for checks.
 [AMD meters on RDNA 2+ dedicated cards](PLAN-AMD-DGPU.md): done 2026-11-11
 (Claude Code). htop `f842f486`, patch 0013, package 3.5.3-14 built and checked at
 `packaging/htop-gpu-3.5.3-14-x86_64.pkg.tar.zst` and **installed** 2026-11-11
-(replacing 3.5.3-13). Not pushed. See the CHANGELOG entry for what differs
+(replacing 3.5.3-13). Pushed 2026-11-11. See the CHANGELOG entry for what differs
 from the plan, AUDIT.md for the package checks.
 
 RDNA 2+ audit (2026-11-11, Codex): identified two findings in 3.5.3-14 — 15 (P2),
@@ -61,20 +61,24 @@ access returns; 16 (P3), an initial clock-scale read failure is not retried once
 a current clock has been sampled. Both reproduced; build/style and all existing
 AMD/heading tests pass. Patches and installed files match the reviewed source.
 See AUDIT.md. Both fixed 2026-11-11 (Claude Code): htop `7c2fe84b`, patch 0014,
-package 3.5.3-15, **installed**. Not pushed. Independently verified by Codex
+package 3.5.3-15, **installed**. Pushed 2026-11-11. Independently verified by Codex
 2026-11-11: both fixes confirmed, no new actionable findings. The original
 probes and additional error/recovery cases pass; the new tests reject the old
 source. Build/style, 169 sampler and 25 heading assertions pass; patch and
 installed-file integrity verified. See AUDIT.md.
 
 Full project audit (2026-11-11, Codex), source `7c2fe84b`, package 3.5.3-15:
-three open findings — 17 (P2), AMD samples on unknown/transitional runtime state;
+identified three findings — 17 (P2), AMD samples on unknown/transitional runtime state;
 18 (P3), upstream checker requires an undocumented developer clone; 19 (P3),
 mode docs omit Intel memory's text/LED restriction. All existing suites and
 additional whole-program sanitizer/static-analysis checks passed. Installed
 files match the archive and coexist with stock htop. Findings 15/16 remain fixed.
 See AUDIT.md for evidence and limits. All three fixed 2026-11-11 (Claude Code):
-htop `943464c0`, patch 0015, package 3.5.3-16, **installed**. Not pushed.
+htop `943464c0`, patch 0015, package 3.5.3-16, **installed**. Pushed 2026-11-11.
+Independently verified 2026-11-11 (Codex): all three resolved under the documented
+power-state compatibility policy; no new actionable findings. Original/extra
+FIFO probes, old-source negative controls, 231 test assertions and real GitHub
+fallback pass. Patches and installed files match the reviewed source. See AUDIT.md.
 
 Planned next: the rest of [AMD meters for any AMD GPU](PLAN-AMD-AGNOSTIC.md)
 (APUs, older cards, card selection).

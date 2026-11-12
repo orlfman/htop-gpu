@@ -4,6 +4,31 @@ Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
 
+## 2026-11-11, Claude Code (Claude Fable 5.2): push
+
+- Pushed at the user's request: `src/htop` `amdgpu-meters` `798d8cfa..943464c0`
+  (f842f486, 7c2fe84b, 943464c0) to orlfman/htop, and this repo's `main`
+  `cc2f286..bc4e168` to orlfman/htop-gpu, followed by this record commit, which
+  also carries Codex's verification of fixes 17–19. Both are fast-forwards; no
+  force push. Nothing else changed.
+
+## 2026-11-11, Codex: independently verify fixes 17–19
+
+- Audited htop `943464c0`, outer `bc4e168` and installed 3.5.3-16. Findings 17–19
+  are confirmed resolved under the documented missing/unsupported power-state
+  policy; no new actionable findings. Original FIFO probes now skip transition
+  and denied-state reads; extra first-sample/static-value error guards pass.
+- Build/style and all 198 sampler, 27 heading and six checker assertions pass.
+  Against the old implementations, the new tests produce 14 sampler failures
+  and five checker failures as intended. The real GitHub fallback also succeeds
+  in a temporary fresh checkout without the developer clone.
+- All 15 patches/checksums and installed payload files verified; the installed
+  capture shows live AMD readings. Details and limits are in AUDIT.md; ignored
+  evidence is under `test/audit-fixes17-19-2026-11-11/`.
+- Only audit/status records changed, left uncommitted. No source/package edits,
+  installation, commit or push. No remaining fix from this review; real suspend
+  and other AMD hardware remain testing limits.
+
 ## 2026-11-11, Claude Code (Claude Fable 5.2): fix audit findings 17, 18 and 19
 
 - 17: `linux/AMDGPU.c` only reads a card known to be awake. New

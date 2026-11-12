@@ -2295,3 +2295,64 @@ rerun. The FIFO shows read attempts, not hardware wakes; no real suspend. The
 GitHub URL fallback was not exercised over the network (the real run used the
 clone's remote). RAPL, Intel GPU, config and style-gate suites were not rerun:
 their sources are untouched.
+
+
+## Independent verification of fixes 17–19 (2026-11-11, Codex)
+
+Reviewed source `943464c03fa21d89440cac37cbc4b4a90c01150a`, outer `bc4e168`,
+patches 0001–0015, updated tests/docs and installed package 3.5.3-16.
+**Findings 17, 18 and 19 are confirmed resolved under the documented power-state
+compatibility policy. No new actionable findings.**
+
+### Independent reproductions and controls
+
+- Reran the original stateful FIFO reproduction from the full audit in a new
+  directory. Exact suspended, suspending and resuming now avoid dynamic reads;
+  an unreadable runtime_status returns unavailable and also avoids the read.
+  Each recovers when active returns, with no sanitizer report.
+- A confirmed missing runtime_status file still permits sampling. This is the
+  explicit policy for kernels without runtime PM, alongside the literal
+  unsupported state; it is not an unaddressed read-error case. The missing-file
+  reproduction accordingly still reports active and attempts the read. The
+  implementation does not distinguish a genuinely unsupported interface from
+  an interface hidden by a custom sysfs mount. Its active-to-sleep race also
+  remains the documented limitation.
+- Added independent first-sample FIFO guards on pp_dpm_mclk: error text, an
+  ELOOP status symlink and a denied power directory all avoid static-value reads
+  before initialization. All recover when active returns. Unsupported permits
+  sampling as documented. These probes exit cleanly under ASan/UBSan.
+- Ran isolated copies of the current fake sampler tests against the prior
+  `7c2fe84b` sampler (current enum header/test driver, old implementation; live
+  phase omitted). Exactly 14 assertions fail, all associated with the old
+  power-state behavior. The other fake assertions pass.
+- Current update-checker tests pass all six local-repository checks. Against
+  the previous helper at `d4db927`, five assertions fail as expected. Separately,
+  a temporary outer checkout layout with no src/htop and no URL override queried
+  the official GitHub repository successfully: exit 0, latest tag 3.5.3. This
+  exercises the real network fallback omitted from Claude's validation.
+- README and PLAN now both describe Intel memory as text/LED only, consistent
+  with IntelGPUMemoryMeter_class. The existing heading exceptions are retained.
+
+### Validation and installed release
+
+Build completed without warning/error diagnostics; style reported STYLE OK.
+All 198 sampler, 27 heading and six checker assertions passed (231 total),
+including live AMD encode at 100% video load and the heading suite's sanitizer
+checks. The normal development executable was restored and verified by the
+heading suite. Unchanged RAPL, Intel GPU, config and style-gate results from the
+preceding full audit remain applicable; those suites were not redundantly rerun.
+
+All 15 patch checksums match PKGBUILD. Applying the series to tag 3.5.3 succeeds
+without fuzz/offsets and reproduces all 16 changed source files exactly. Earlier
+patches 0001–0014 changed only their subject numbering. Archive SHA-256:
+`882e5f46cbacb36d3f9966f71ea9ae891c2401122231603a856ebd9d5b9ea580`.
+All five installed payload files match the archive, pacman reports zero altered
+files, and the installed executable reports `3.5.3-16-gpu`. A throwaway-config
+capture shows the RX 9070 XT heading and AMD readings.
+
+Evidence, isolated negative controls, original/extra reproductions and package
+proof are in ignored `test/audit-fixes17-19-2026-11-11/`. Only AUDIT.md,
+CHANGELOG.md and PLAN.md changed, left uncommitted. No source/committed-test
+changes, package rebuild, installation, commit or push. No real sysfs permissions
+or user configs changed. FIFO guards prove skipped reads rather than physical
+power behavior. No real suspend/hotplug or other AMD hardware was tested.
