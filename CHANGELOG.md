@@ -4,6 +4,65 @@ Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
 
+## 2026-11-11, Claude Code (Claude Fable 5.2): fix audit findings 17, 18 and 19
+
+- 17: `linux/AMDGPU.c` only reads a card known to be awake. New
+  `AMDGPU_powerState()` and status `AMDGPU_UNAVAILABLE`: `active`, `unsupported`
+  or no `runtime_status` file → read; `suspended` / `suspending` / `resuming` →
+  sleep; anything else or an unreadable status → N/A with the card name kept.
+  The meter file is unchanged.
+- 18: `tools/check-upstream.sh` works from a fresh clone (falls back to htop's
+  GitHub URL without `src/htop`), new `tools/test-check-upstream.sh`.
+- 19: README and PLAN say `IntelGPUMemory` is text / LED only.
+- 17 and 18 reproduced as failing tests first. Build without warnings,
+  `STYLE OK`, `test-sampler.py` 198, `test-headings.py` 27,
+  `test-check-upstream.sh` 6, all ALL PASSED. Details and limits in AUDIT.md.
+- Committed, packaged and installed at the user's request: htop `943464c0`
+  (`linux: read an AMD card only when it is known to be awake`, a new commit),
+  patch 0015, pkgrel 16. Installed `/usr/bin/htop-gpu` is byte-identical to the
+  package's and shows the AMD meters live. The outer commit also carries
+  Codex's two uncommitted audit records.
+- Not pushed (not asked for). Next: push when the user says so; then the rest
+  of PLAN-AMD-AGNOSTIC.md.
+
+## 2026-11-11, Codex: full project audit
+
+- Reviewed all custom source changes, helpers, packaging and current docs at
+  htop `7c2fe84b`, outer `d4db927`, installed 3.5.3-15. New findings: 17 (P2),
+  AMD hardware reads continue when runtime state is unreadable or transitioning;
+  18 (P3), the upstream checker fails without the separate developer clone;
+  19 (P3), docs omit Intel memory's text/LED-only modes. Details and suggested
+  corrections are in AUDIT.md. No fixes applied.
+- Config tests pass on development and installed binaries (33 each), style-gate
+  7, CPU power 49 and Intel GPU 158, including live workloads/negative controls.
+  Retained the preceding unchanged-source AMD 169/heading 25/style/patch proofs.
+  Full-program ASan/UBSan meter-mode checks and GCC analyzer found no issues.
+- Package integrity and stock-htop coexistence rechecked. Normal development
+  binary restored. Audit probes/logs are ignored under `test/full-audit-2026-11-11/`.
+  AMD power-state FIFO probes confirm reads, not actual hardware wakeups.
+- Only audit/status records changed, left uncommitted together with the preceding
+  audit's records. No install, commit, push, user-config or system changes.
+  Findings 15/16 remain fixed; deferred 7 and accepted 12 retain their status.
+  Next: address findings 17–19.
+
+## 2026-11-11, Codex: independently verify fixes 15 and 16
+
+- Audited htop `7c2fe84b`, outer `d4db927` and installed 3.5.3-15. Both findings
+  are confirmed fixed, with no new actionable findings. Original independent
+  reproductions now recover; extra ELOOP/ENOTDIR, VCN fallback, sleep and
+  replacement-card probes pass under ASan/UBSan.
+- The updated fake tests run against the old `f842f486` sampler fail exactly the
+  two intended recovery assertions. Build/style, all 169 current sampler and
+  25 heading assertions pass, including the live AMD video workload.
+- All 14 patches/checksums verified; application reproduces all 16 changed
+  source files. All five installed payload files match the package, pacman
+  reports zero altered files, and the installed AMD meters display live.
+- Full evidence and limits are in AUDIT.md; ignored logs/probes are under
+  `test/audit-fixes15-16-2026-11-11/`. Only these three audit/status records
+  changed, left uncommitted. No source/package edits, installation, commit or
+  push. No pending fix from this review; real non-9070-XT hardware and suspend
+  remain testing limits.
+
 ## 2026-11-11, Claude Code (Claude Fable 5.2): fix audit findings 15 and 16
 
 - Reproduced both of Codex's findings as new `test-sampler.py` cases against

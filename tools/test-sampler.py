@@ -9,7 +9,7 @@
 
 Needs src/htop configured (./configure). Run: python3 -I test-sampler.py
 """
-import glob, json, os, shutil, subprocess, sys, tempfile, time
+import glob, json, os, select, shutil, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.dont_write_bytecode = True  # keep tools/ free of __pycache__
@@ -32,6 +32,9 @@ LABELS = ["edge", "junction", "mem"]
 SCLK_SEED = 3000.0
 MEM_RATE_MULTIPLIER = 16
 ABSENT_TRIES = 5
+# power/runtime_status -> sample status; anything else, or a read error, is "unavailable"
+POWER_STATES = {"active": "active", "unsupported": "active", "suspended": "suspended",
+                "suspending": "suspended", "resuming": "suspended"}
 
 # graphics core version -> (chip, GPU clock seed; None = top pp_dpm_sclk level)
 CHIPS = {(10, 3, 0): ("Navi 21", None), (10, 3, 2): ("Navi 22", None), (10, 3, 4): ("Navi 23", None),
@@ -166,11 +169,15 @@ def expected(root, pci=PCI):
         e[k] = None
     try:
         status = open(f"{dev}/power/runtime_status").read().strip()
+    except FileNotFoundError:
+        status = "active"  # a kernel without runtime power management: the card cannot sleep
     except OSError:
         status = None
-    if status == "suspended":
-        # nothing is read from a sleeping card, not even the values that never change
-        e.update(status="suspended", vramTotal=None, mclkMax=None, tempCrit=[None] * 3, fanMax=None,
+    state = POWER_STATES.get(status, "unavailable")
+    if state != "active":
+        # nothing is read from a card that sleeps or whose power state is not known, not even
+        # the values that never change
+        e.update(status=state, vramTotal=None, mclkMax=None, tempCrit=[None] * 3, fanMax=None,
                  sclkPeak=seed)
         return e
 
@@ -242,6 +249,17 @@ class Sampler:
         self.p.stdin.write(f"{ms}\n")
         self.p.stdin.flush()
         return json.loads(self.p.stdout.readline())
+
+    def sample_guarded(self, ms, fifo, timeout=2.0):
+        """A sample while `fifo` stands in for a sysfs file: (sample, True if the sampler read it).
+        Reading a FIFO blocks, so a sample that does not arrive is released by writing "7"."""
+        self.p.stdin.write(f"{ms}\n")
+        self.p.stdin.flush()
+        blocked = not select.select([self.p.stdout], [], [], timeout)[0]
+        if blocked:
+            with open(fifo, "w") as f:
+                f.write("7\n")
+        return json.loads(self.p.stdout.readline()), blocked
 
     def close(self):
         self.p.stdin.close()
@@ -340,6 +358,12 @@ def main():
              lambda r: write(f"{dev(r)}/power/runtime_status", "suspended\n"), expected),
             ("no runtime_status file: treated as active",
              lambda r: os.remove(f"{dev(r)}/power/runtime_status"), expected),
+            ("runtime_status unsupported (runtime power management off): treated as active",
+             lambda r: write(f"{dev(r)}/power/runtime_status", "unsupported\n"), expected),
+            ("runtime_status suspending: nothing read",
+             lambda r: write(f"{dev(r)}/power/runtime_status", "suspending\n"), expected),
+            ("runtime_status error: nothing read",
+             lambda r: write(f"{dev(r)}/power/runtime_status", "error\n"), expected),
             ("gpu_metrics revision 1.4: vclk/dclk N/A", metrics_patch(3, b"\x04"), expected),
             ("gpu_metrics wrong size field: vclk/dclk N/A", metrics_patch(0, b"\x80\x00"), expected),
             ("gpu_metrics truncated", lambda r: os.truncate(f"{dev(r)}/gpu_metrics", 60), expected),
@@ -629,6 +653,45 @@ def main():
         write(f"{dev(root)}/vcn_busy_percent", "55\n")
         got = s.sample(400)
         check("vcn_busy_percent appears: used instead", got["vcnBusy"] == 55, json.dumps(got))
+        rc, err = s.close()
+        check("clean exit (ASan/UBSan)", rc == 0 and not err.strip(), err.strip()[:400])
+
+        # AUDIT.md finding 17: only a card known to be awake is read. gpu_busy_percent is a FIFO
+        # here, so a read attempt shows as a sample that does not arrive.
+        print("[power state unknown or changing: nothing read, under one running sampler]")
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.copytree(base, root, symlinks=True)
+        status = f"{dev(root)}/power/runtime_status"
+        busy = f"{dev(root)}/gpu_busy_percent"
+        s = Sampler(fake_bin)
+        ms = 100
+        d = diff(s.sample(ms), expected(root))
+        check("active at first", not d, json.dumps(d))
+        for name, text, mode, want in (("suspended", "suspended\n", 0o644, "suspended"),
+                                       ("suspending", "suspending\n", 0o644, "suspended"),
+                                       ("resuming", "resuming\n", 0o644, "suspended"),
+                                       ("error", "error\n", 0o644, "unavailable"),
+                                       ("unknown text", "abc\n", 0o644, "unavailable"),
+                                       ("empty", "", 0o644, "unavailable"),
+                                       ("unreadable", "suspended\n", 0, "unavailable")):
+            os.remove(busy)
+            os.mkfifo(busy)
+            write(status, text)
+            os.chmod(status, mode)
+            ms += 100
+            got, blocked = s.sample_guarded(ms, busy)
+            os.chmod(status, 0o644)
+            check(f"{name}: no read attempted", not blocked)
+            check(f"{name}: status {want}, card and one-time values kept, the rest N/A",
+                  got["status"] == want and got["card"] == "Radeon RX 9070 XT" and got["vramTotal"] is not None
+                  and got["fanMax"] is not None and all(got[k] is None for k in DYNAMIC)
+                  and got["temp"] == [None] * 3, json.dumps(got))
+            os.remove(busy)
+            write(busy, "9\n")
+            write(status, "active\n")
+            ms += 100
+            d = diff(s.sample(ms), expected(root))
+            check(f"{name}: active again, everything read", not d, json.dumps(d))
         rc, err = s.close()
         check("clean exit (ASan/UBSan)", rc == 0 and not err.strip(), err.strip()[:400])
 

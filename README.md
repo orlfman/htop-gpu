@@ -51,7 +51,7 @@ For the CPU:
 
 There are also two headings you can put above a group of meters: one with the card's name, and one with the CPU's name ("Intel Core Ultra 7 270K Plus" here), like the "Intel iGPU" one.
 
-All of them work like normal htop meters. You add them in F2 Setup and can show each one as a bar, text, graph or LED, except the headings, which are just text.
+All of them work like normal htop meters. You add them in F2 Setup and can show each one as a bar, text, graph or LED. Two exceptions: the headings are just text, and the Intel iGPU memory meter is text or LED only, since there's no total to draw a bar against.
 
 ## Will it work on my computer?
 

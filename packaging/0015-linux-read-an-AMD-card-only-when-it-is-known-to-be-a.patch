@@ -1,0 +1,82 @@
+From 943464c03fa21d89440cac37cbc4b4a90c01150a Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Wed, 11 Nov 2026 18:24:44 -0700
+Subject: [PATCH 15/15] linux: read an AMD card only when it is known to be
+ awake
+
+Only a runtime_status of exactly "suspended" stopped the sampler from
+reading the card. While the card was suspending or resuming, or when
+the status could not be read, it was treated as active and its sysfs
+files were read, which on kernels that resume the device for such
+reads can wake it.
+
+Decide the power state in one place. The card is read when
+runtime_status is "active", or when runtime power management is not
+in use for it: "unsupported", or no such file. "suspended",
+"suspending" and "resuming" are AMDGPU_SUSPENDED. Anything else,
+including a status that cannot be read, is the new AMDGPU_UNAVAILABLE:
+the card and its one-time values are kept, nothing is read, and the
+meters show N/A.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ linux/AMDGPU.c | 25 +++++++++++++++++++------
+ linux/AMDGPU.h |  1 +
+ 2 files changed, 20 insertions(+), 6 deletions(-)
+
+diff --git a/linux/AMDGPU.c b/linux/AMDGPU.c
+index 201b25d9..b4474b84 100644
+--- a/linux/AMDGPU.c
++++ b/linux/AMDGPU.c
+@@ -458,6 +458,21 @@ static bool AMDGPU_readStatic(void) {
+    return true;
+ }
+ 
++/* AMDGPU_ACTIVE only for a card that is awake and stays so on its own: runtime_status "active",
++   or runtime power management not in use for it ("unsupported", or a kernel without the file).
++   A status that cannot be read or is not known says nothing, so the card is left alone. */
++static AMDGPUStatus AMDGPU_powerState(void) {
++   char status[32];
++   if (!AMDGPU_readText(deviceDir, "power/runtime_status", status, sizeof(status)))
++      return AMDGPU_absent(deviceDir, "power/runtime_status") ? AMDGPU_ACTIVE : AMDGPU_UNAVAILABLE;
++
++   if (String_eq(status, "active") || String_eq(status, "unsupported"))
++      return AMDGPU_ACTIVE;
++   if (String_eq(status, "suspended") || String_eq(status, "suspending") || String_eq(status, "resuming"))
++      return AMDGPU_SUSPENDED;
++   return AMDGPU_UNAVAILABLE;
++}
++
+ static void AMDGPU_refresh(void) {
+    AMDGPU_clearValues();
+ 
+@@ -467,13 +482,11 @@ static void AMDGPU_refresh(void) {
+       return;
+    }
+ 
+-   /* reading anything else would wake a runtime suspended card */
+-   char status[32];
+-   if (AMDGPU_readText(deviceDir, "power/runtime_status", status, sizeof(status)) && String_eq(status, "suspended")) {
+-      sample.status = AMDGPU_SUSPENDED;
++   /* Reading anything else can wake a runtime suspended card, so that is only done once the
++      card is known to be awake */
++   sample.status = AMDGPU_powerState();
++   if (sample.status != AMDGPU_ACTIVE)
+       return;
+-   }
+-   sample.status = AMDGPU_ACTIVE;
+ 
+    /* hwmon can be replaced while the card stays, e.g. renumbered: look for it again then */
+    if (staticRead && access(hwmonDir, F_OK) != 0) {
+diff --git a/linux/AMDGPU.h b/linux/AMDGPU.h
+index d28fab44..49d7d50e 100644
+--- a/linux/AMDGPU.h
++++ b/linux/AMDGPU.h
+@@ -12,6 +12,7 @@ in the source distribution for its full text.
+ 
+ typedef enum AMDGPUStatus_ {
+    AMDGPU_NOT_FOUND,
++   AMDGPU_UNAVAILABLE,   /* there, but not known to be awake: nothing is read from it */
+    AMDGPU_SUSPENDED,
+    AMDGPU_ACTIVE,
+ } AMDGPUStatus;

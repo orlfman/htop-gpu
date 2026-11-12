@@ -1,7 +1,7 @@
 From 61c598b1a128e06864a4f071347d6ed63ce71282 Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 28 Oct 2026 18:32:52 -0700
-Subject: [PATCH 09/14] linux: label Intel CPU power meter Pwr
+Subject: [PATCH 09/15] linux: label Intel CPU power meter Pwr
 
 Use Pwr for the CPU package power caption, as requested, alongside
 the GPU power meter in its own column. Keep IntelCPUPower as the meter

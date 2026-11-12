@@ -2030,3 +2030,268 @@ Limits: the suites ran on the development tree, not the packaged executable. Cod
 own probes under `test/audit-rdna2-2026-11-11/` were not rerun. Access failures
 were only produced with permissions on synthetic trees; errors other than
 EACCES and ENOENT were not produced.
+
+
+## Independent verification of fixes 15 and 16 (2026-11-11, Codex)
+
+Audited htop `7c2fe84b07755eb1743ce6d5ef5517a96ad8bdda`, outer `d4db927`,
+patches 0001–0014 and installed package 3.5.3-15. Compared the fix to `f842f486`
+and reviewed the eight added assertions. **Findings 15 and 16 are confirmed
+fixed; no new actionable findings.**
+
+### Recovery and regression-test verification
+
+- Reran the original independent probes from the preceding audit, copied to a
+  fresh folder. After the sensor directory is unsearchable for six refreshes,
+  restoring permissions now restores all temperatures, both clocks and fanMax
+  in the same process. The file-level permission control still passes.
+- The original clock probe now moves from a temporary 600 MHz scale to the
+  recovered 2575 MHz maximum on the very next refresh and keeps that scale for
+  all eight subsequent samples. All nine GC variants still discover correctly
+  with a missing ids file and their chip-name fallbacks.
+- Ran the current committed fake sampler tests against an isolated copy of
+  `f842f486` (only the build input was changed; the live phase was omitted).
+  Exactly the two intended assertions fail: sensor recovery after six denied
+  refreshes, and clock-scale recovery to 2575 MHz. All other fake assertions
+  pass. This independently confirms the new tests reject the buggy source.
+- Additional ASan/UBSan probes exercised ELOOP for fan1_max, freq1_label and
+  pp_dpm_sclk, and ENOTDIR for the sensor directory. Each recovered in the same
+  process after nine failed refreshes. These validate error types beyond
+  Claude's EACCES and ENOENT cases.
+- VCN probe: a looping attribute symlink reports unavailable, removing it
+  enables the 37% gpu_metrics fallback, and creating a readable direct
+  attribute changes the result to its 55%. Error and absence stay distinct.
+- A delayed DPM maximum recovered across synthetic suspend/resume without
+  shrinking a previously observed 2700 MHz peak. Unbinding and rebinding a
+  different GC variant reset the cached seed to that card's 1800 MHz maximum.
+  All independent probes exited cleanly with no sanitizer reports.
+
+### Build, release and installed checks
+
+- Build passed without warning/error diagnostics; style reported STYLE OK.
+  The complete sampler suite passed all 169 assertions, including the live
+  VA-API workload (100% video load observed). Heading tests passed all 25
+  assertions, including the full-program sanitizer checks and live headings.
+- All 14 patch checksums match PKGBUILD. The series applies to tag 3.5.3 without
+  fuzz or offsets and reproduces all 16 changed source files at HEAD exactly.
+  Patches 0001–0013 differ from the preceding release only in subject numbering.
+- Archive SHA-256 is
+  `bcbd15105e4e55688079187203ac47b57d649f81cc008ae765cfba7470cea077`.
+  All five installed payload files match the package archive; pacman reports
+  zero altered files. The installed executable reports `3.5.3-15-gpu` and
+  displays the RX 9070 XT heading and AMD readings in a throwaway config.
+
+Evidence is in ignored `test/audit-fixes15-16-2026-11-11/`, including the original
+probes, extra probes, isolated negative control, patch proof and all test logs.
+Only AUDIT.md, CHANGELOG.md and PLAN.md changed, left uncommitted. No source,
+committed test or package edits; no install, commit or push. Hardware testing
+remains limited to the RX 9070 XT. Other cards, access failures, sleep and card
+replacement were simulated; real firmware errors, suspend and hotplug were not
+exercised. Unchanged kernel-layout/card-table assumptions retain the previous
+audit's verification; no new kernel research was necessary for this fix.
+
+
+## Full project audit (2026-11-11, Codex)
+
+### Scope and result
+
+Reviewed all 14 custom commits above htop 3.5.3 at source
+`7c2fe84b07755eb1743ce6d5ef5517a96ad8bdda`, outer `d4db927`, and installed
+3.5.3-15. Scope includes all 16 changed source files (AMD, Intel GPU, CPU power,
+headings, config isolation and registration), test/build/release helpers,
+PKGBUILD/patches, current README and plan claims. The preceding fix-verification
+records were already uncommitted and are preserved.
+
+Three actionable findings: 17 (P2, runtime power-state handling), 18 (P3, update
+checker), 19 (P3, documentation). No fixes were applied. Previously fixed
+findings 15/16 remain verified; deferred finding 7 (additional RAPL packages)
+and accepted finding 12 (CPU-name UTF-8 truncation) retain their prior status.
+
+### 17. [P2] AMD samples hardware when runtime state is unknown or transitioning
+
+Location: `src/htop/linux/AMDGPU.c:470-476`.
+
+Only a successfully read exact `suspended` string stops dynamic reads. A failed
+runtime_status read, `suspending`, or `resuming` falls through to AMDGPU_ACTIVE
+and reads the hardware attributes. This violates the intended passive-monitoring
+behavior when an AMD card is entering sleep or its state cannot be established.
+IntelGPU_refresh already avoids analogous unknown/transition-state reads.
+
+Reproduced under one running ASan/UBSan sampler for each state: first establish
+an active baseline, replace the copied gpu_busy_percent attribute with a blocking
+FIFO, then change runtime_status. Exact `suspended` returns immediately without
+opening the FIFO. `suspending`, `resuming`, a missing status file and an unreadable
+status file all attempt the dynamic read and wait for a writer. Supplying `7`
+unblocks them, producing status `active` and gpuBusy 7; restoring the tree then
+recovers normally. The permission-denied case's actual status contents remain
+`suspended`, so treating an unreadable status as awake is directly demonstrated.
+All probe processes exit cleanly after the controlled FIFO release.
+
+Hardware consequence is kernel-dependent: in
+[Linux v6.12 amdgpu_pm.c](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/amd/pm/amdgpu_pm.c),
+gpu_busy_percent calls amdgpu_hwmon_get_sensor_generic, which uses
+pm_runtime_get_sync and can resume a runtime-suspended device. This matters to
+supported RDNA 2/3 systems on such kernels. The v7.3 source examined in the
+preceding audit uses get-if-active reads instead, mitigating the wake consequence;
+this machine also has runpm disabled. No physical wake was induced or measured.
+This is an existing sampler behavior exposed by the broader review, not a
+regression introduced by the findings 15/16 fixes.
+
+Suggested correction: stop hardware sampling on read errors and sleep
+transitions, retain metadata, and report unavailable/sleep until the card is
+known active. Define an explicit policy for kernels without runtime-PM support.
+Add stateful FIFO guards for failed status reads and transitions, in addition
+to the existing exact-suspended case. An active-to-sleep race after a successful
+state read is a separate driver-level limit, not solved by this guard alone.
+
+Evidence: `test/full-audit-2026-11-11/amd-power-state.py`, its `.log`, and
+`amdgpu_pm-v6.12.c`.
+
+### 18. [P3] Upstream checker requires an undocumented developer checkout
+
+Location: `tools/check-upstream.sh:7-15`; README's installation/update instructions.
+
+The README installs from the outer project repository with makepkg, then directs
+the user to check-upstream.sh for new releases. The script instead queries the
+`upstream` remote in `src/htop`, a separate ignored developer clone. A documented
+fresh installation does not create that path: makepkg's checkout is under
+packaging. As a result the advertised checker cannot determine an upstream
+version, even if network access is available.
+
+Reproduced in a temporary git repository containing the committed helper and
+PKGBUILD, with no developer src/htop clone. The helper exits 1 and prints
+`upstream latest tag: unknown (no network?)`. The local repository/remote lookup
+fails before an official upstream URL can be queried; the message misleadingly
+suggests network trouble.
+
+Suggested correction: query the official htop URL directly, or use the developer
+remote only when it exists and fall back to the URL. Add a lightweight isolated
+helper test that does not provide src/htop. The script's old comment saying this
+package replaces stock htop should also be updated when touching the file.
+Evidence: `fresh-project/` and `fresh-upstream-check.log` in the audit directory.
+
+### 19. [P3] Display-mode documentation omits the Intel memory restriction
+
+Locations: `README.md:54`, `PLAN.md` Meters paragraph (around line 144 before
+this audit's status addition). `src/htop/linux/IntelGPUMeter.c:183-198` is the
+reference implementation.
+
+The docs say every non-heading meter supports bar, text, graph and LED modes.
+IntelGPUMemory explicitly supports only text and LED, because it has no meaningful
+whole-device memory denominator. Users cannot select the advertised bar/graph
+modes for that meter. The prior finding 9 correction added the heading exception
+but left this other exception unmentioned.
+
+Suggested correction: document Intel iGPU memory as text/LED only in both places;
+keep the implementation's deliberate restriction. Confirmed by the class's
+supportedModes declaration and sanitized text/LED captures; no runtime change
+is needed.
+
+### Validation
+
+All checks below passed. Existing suites do not cover finding 17's failing state
+reads/transitions or finding 18's fresh-install layout.
+
+| Area | Evidence |
+| --- | --- |
+| AMD sampler | 169 assertions, including live encode, from the preceding same-version audit |
+| Headings | 25 assertions from the preceding same-version audit |
+| Config isolation | 33 assertions on the dev binary and 33 on installed /usr/bin/htop-gpu |
+| Style gate | 7 checks, including broken-tool and deliberately bad-style controls |
+| CPU power | 49 assertions; live idle 9.34 W, busy 126.82 W; sanitizers clean |
+| Intel GPU | 158 assertions, including three negative controls and live encode/decode/graphics; peaks 32.9%/18.7%/100% |
+| Full sanitizer build | All source files instrumented; normal build restored afterward; no new warnings |
+| Meter modes | Twelve numeric meters exercised in all four modes, all three headings in text, Intel memory in text/LED; no sanitizer reports |
+| Static analysis | GCC -fanalyzer on all six custom implementation .c files: no diagnostics |
+| Tool syntax | Every Python helper parsed; bash -n passed for all shell helpers and PKGBUILD |
+
+The source and package did not change between the immediately preceding audit
+and this one, so its successful build/style, AMD/heading suites, error-recovery
+probes, old-source negative control and 14-patch checksum/application proof are
+retained instead of redundantly rerunning them. Logs remain in
+`test/audit-fixes15-16-2026-11-11/`. That proof reproduces all 16 changed source
+files exactly from upstream tag 3.5.3. This audit's full sanitized and normal
+rebuilds additionally compile the entire current development source.
+
+Rechecked the package archive SHA-256
+`bcbd15105e4e55688079187203ac47b57d649f81cc008ae765cfba7470cea077`, all five
+installed payload files against it, and pacman integrity (zero altered files).
+No payload paths collide with stock htop. Versions remain htop-gpu 3.5.3-15 and
+stock htop 3.5.3-1.1. The normal dev executable contains neither ASan nor this
+audit's fake path. namcap still reports the established hicolor-icon-theme,
+implicit glibc and possibly unnecessary libnl diagnostics; no new diagnostic.
+
+### Limits and preservation
+
+Evidence and reproducible probes are in ignored `test/full-audit-2026-11-11/`.
+The FIFO proves a read attempt, not an actual hardware wake or kernel hang.
+Hardware testing is limited to this RX 9070 XT, Arrow Lake iGPU and CPU. Other
+AMD generations, errors and transitions were simulated; no physical hotplug,
+forced suspend or external Mission Center comparison. UI captures exercise
+supported modes but are not an interactive walkthrough of every F2 operation.
+No package rebuild/install or dependency change was performed. Review covers
+the project's changes and their integration, not an exhaustive independent
+review of every unchanged upstream htop file or external dependency.
+
+Only AUDIT.md, CHANGELOG.md and PLAN.md are modified, including the earlier
+uncommitted fix-verification records. No runtime/source/test fixes, no commit or
+push, and no real config/sysfs permission changes. The source worktree is clean.
+
+
+## Resolution of findings 17, 18 and 19 (2026-11-11, Claude Code)
+
+Claude Code (Claude Fable 5.2). 17 and 18 were reproduced first as new tests
+against the audited code (htop `7c2fe84b`, outer `d4db927`): the sampler read the
+FIFO in every state but an exact `suspended` (14 failed checks), and the old
+checker failed 5 of the 6 new checker checks.
+
+- **17, fixed** in `linux/AMDGPU.c` / `.h`. New `AMDGPU_powerState()` with an
+  explicit policy, and a new status `AMDGPU_UNAVAILABLE` (found, nothing read):
+  - read the card: `runtime_status` is `active`; or `unsupported` (runtime power
+    management not in use for the device); or the file is confirmed absent
+    (ENOENT, a kernel without runtime PM). This is the "kernels without
+    runtime-PM" policy the audit asked for.
+  - `AMDGPU_SUSPENDED` ("sleep"): `suspended`, `suspending`, `resuming`.
+  - `AMDGPU_UNAVAILABLE` ("N/A", card name and one-time values kept): `error`,
+    any other text, an empty file, or a read that fails for any reason but
+    ENOENT.
+  The meter file needed no change: it already shows N/A for every status that is
+  neither active nor suspended, and the heading reads `<card>: N/A`.
+  Differs from the Intel iGPU sampler in two deliberate ways: `resuming` is
+  shown as sleep rather than unavailable, and `unsupported` / no file count as
+  awake. The race the audit names (card suspends after the status was read)
+  is not addressed.
+- **18, fixed** in `tools/check-upstream.sh`: it asks `src/htop`'s `upstream`
+  remote when that clone has one, otherwise `https://github.com/htop-dev/htop.git`
+  (`HTOP_UPSTREAM_URL` overrides, used by the test). On failure it says where it
+  asked. The stale "replaces the repo htop" comment is corrected. New
+  `tools/test-check-upstream.sh` (6 checks, local stand-in repositories).
+- **19, fixed** in README.md and the PLAN.md Meters paragraph: `IntelGPUMemory`
+  is text / LED only. No code change.
+
+New tests: `test-sampler.py` +29 (198): first-sample cases for `unsupported`,
+`suspending`, `error`; under one running sampler with `gpu_busy_percent` as a
+FIFO, the states suspended, suspending, resuming, error, unknown text, empty and
+unreadable must not attempt a read, must keep card and one-time values, and
+must read everything again once active. `test-headings.py` +2 (27): unknown
+power state under one running htop.
+
+Validation: build without warnings, `STYLE OK`, `test-sampler.py` ALL PASSED
+(198, live idle + VA-API encode, ASan/UBSan), `test-headings.py` ALL PASSED (27),
+`test-check-upstream.sh` ALL PASSED (6), and a real `check-upstream.sh` run
+against the developer clone (3.5.3, up to date).
+
+Released the same day at the user's request: htop `943464c0` (patch 0015),
+package 3.5.3-16, SHA-256
+`882e5f46cbacb36d3f9966f71ea9ae891c2401122231603a856ebd9d5b9ea580`. Patches
+0001-0014 only change their `[PATCH nn/15]` numbering; namcap gives the same
+three diagnostics. Installed with `pacman -U`: `pacman -Q` reports 3.5.3-16,
+`/usr/bin/htop-gpu` matches the package executable byte for byte and shows
+`Radeon RX 9070 XT` with all AMD meters live in a throwaway config.
+
+Limits: the suites ran on the development tree, not the packaged executable.
+Codex's probes under `test/full-audit-2026-11-11/` were not
+rerun. The FIFO shows read attempts, not hardware wakes; no real suspend. The
+GitHub URL fallback was not exercised over the network (the real run used the
+clone's remote). RAPL, Intel GPU, config and style-gate suites were not rerun:
+their sources are untouched.

@@ -8,8 +8,8 @@ to know lives in this folder, never only in one agent's private memory.
 
 A personal custom build of htop 3.5.3 with header meters for AMD dedicated cards
 (RDNA 2, 3 and 4: RX 6000, 7000 and 9000; developed and tested on an RX 9070 XT,
-the others only against fake sysfs trees; htop `f842f486` + `7c2fe84b`, installed as
-3.5.3-15):
+the others only against fake sysfs trees; htop `f842f486`, `7c2fe84b`, `943464c0`; installed as
+3.5.3-16):
 GPU usage, VRAM, power, edge/junction/memory temperatures, GPU clock, VRAM clock,
 video engine. Not meant for upstream htop, but kept as close to upstream as
 possible so new htop releases are easy to rebase onto.
@@ -112,6 +112,10 @@ Run after every change, from this folder:
 - After touching `tools/check-style.sh`: `tools/test-check-style.sh` must end
   with `ALL PASSED`. `check-style.sh` exits 2 (`STYLE CHECK FAILED TO RUN`) when
   a tool is missing or broken; that is not a pass.
+- After touching `tools/check-upstream.sh`: `tools/test-check-upstream.sh` must
+  end with `ALL PASSED` (local stand-in repositories, no network). The checker
+  works from a fresh clone: it asks `src/htop`'s `upstream` remote when that
+  clone exists, otherwise htop's GitHub repository.
 - New tests should change state under one running process where the code keeps
   state across refreshes; restarting per case hides staleness bugs (AUDIT.md).
 

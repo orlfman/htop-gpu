@@ -38,6 +38,7 @@ static void printArray(const char* key, const double* values, size_t count) {
 int main(void) {
    static const char* const statusNames[] = {
       [AMDGPU_NOT_FOUND] = "not_found",
+      [AMDGPU_UNAVAILABLE] = "unavailable",
       [AMDGPU_SUSPENDED] = "suspended",
       [AMDGPU_ACTIVE]    = "active",
    };

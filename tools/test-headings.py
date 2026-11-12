@@ -111,6 +111,8 @@ AMD_CASES = [
     ("unbound -> active (rediscovered)", ["--unbind"], [], CARD),
     ("suspended -> active", ["--suspended"], [], CARD),
     ("suspended at start", ["--suspended"], None, f"{CARD}: sleep"),
+    ("active -> power state unknown", [], ["--write", "power/runtime_status=error"], f"{CARD}: N/A"),
+    ("power state unknown -> active", ["--write", "power/runtime_status=error"], [], CARD),
     ("unbound at start", ["--unbind"], None, "AMD GPU: N/A"),
 ]
 
