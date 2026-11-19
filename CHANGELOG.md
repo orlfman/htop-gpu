@@ -4,6 +4,10 @@ Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
 
+## 2026-11-19, Claude Code (Claude Opus 5.5) — make htop-gpu public
+
+At the user's request. Before the switch I scanned every commit for emails, tokens, keys, serials, MAC and IP addresses and found none. All commits use the noreply identity. Added `LICENSE` (htop's GPL v2 text, matching `license=('GPL-2.0-or-later')`). At the user's choice, `orlfman/htop` stays private: the README "Where things are" section, the PKGBUILD comment and `url`, and the GitHub repo description now point at `packaging/` instead of that repo. Updated AGENTS.md and the PLAN.md GitHub and "Before going public" notes. Then switched `orlfman/htop-gpu` to public. Patches and checksums are unchanged; the PKGBUILD edits are metadata only, so no rebuild is needed.
+
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — push
 
 - Pushed at the user's request: `src/htop` `amdgpu-meters` `943464c0..c3a0d73c` to orlfman/htop, and this repo's `main` `e593453..d847487` (a95ec50, d847487) to orlfman/htop-gpu, followed by this record commit. Both were fast-forwards; no force push. Nothing else changed.

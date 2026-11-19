@@ -1,6 +1,6 @@
 # Maintainer: orlfman <25542856+orlfman@users.noreply.github.com>
 # Based on Arch Linux's htop PKGBUILD by Christian Hesse, T.J. Townsend and contributors.
-# The patches are the amdgpu-meters commits of https://github.com/orlfman/htop,
+# The patches are the amdgpu-meters commits of the project's htop clone (src/htop),
 # exported with tools/export-patches.sh (which also updates _patches and the checksums).
 # Everything is installed under the htop-gpu name and it reads ~/.config/htop-gpu/htop-gpurc,
 # so it sits next to the stock htop package instead of replacing it.
@@ -10,7 +10,7 @@ pkgver=3.5.3
 pkgrel=17
 pkgdesc='Interactive process viewer with AMD Radeon RX 6000/7000/9000 and Intel iGPU meters, alongside stock htop'
 arch=('x86_64')
-url='https://github.com/orlfman/htop'
+url='https://github.com/orlfman/htop-gpu'
 license=('GPL-2.0-or-later')
 depends=('libcap' 'libcap.so' 'libnl' 'ncurses' 'libncursesw.so')
 makedepends=('git' 'lm_sensors')

@@ -93,8 +93,8 @@ Intel descriptor audit (2026-11-19): finding 24 is fixed in the 3.5.3-17 tree an
 
 In progress: nobody.
 
-GitHub (both private): https://github.com/orlfman/htop-gpu (this folder) and
-https://github.com/orlfman/htop (branch `amdgpu-meters`).
+GitHub: https://github.com/orlfman/htop-gpu (this folder, public since 2026-11-19) and
+https://github.com/orlfman/htop (branch `amdgpu-meters`, still private).
 
 Agents: read `AGENTS.md` first (shared rules, turn-taking, checks).
 History: `CHANGELOG.md`.
@@ -459,12 +459,12 @@ Meters (steps 2 to 4):
 
 ## Before going public
 
-Both GitHub repos are private for now. Before making them public:
+htop-gpu went public on 2026-11-19 with a LICENSE, and its README, PKGBUILD and
+repo description point at `packaging/`. `orlfman/htop` is still private. Left over:
 
 - Turn `orlfman/htop` into a real GitHub fork of htop-dev/htop (forks can't be
   private, so it's a plain repo now): fork on GitHub, push `amdgpu-meters` there,
   delete the private copy.
-- Add a `LICENSE` (GPL-2.0-or-later, like htop) to htop-gpu. (`README.md` added 2026-10-29.)
 - `tools/test-sampler.py`: find the card's PCI address instead of hardcoding
   `0000:04:00.0`.
 

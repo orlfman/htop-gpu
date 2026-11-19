@@ -85,11 +85,11 @@ To get rid of it, `sudo pacman -R htop-gpu`. Regular htop doesn't care either wa
 
 ## Where things are
 
-The actual code lives in [orlfman/htop](https://github.com/orlfman/htop) on the `amdgpu-meters` branch, as a handful of commits on top of htop 3.5.3. I try to keep it close to upstream htop and follow their style, so moving to a new htop release is mostly a rebase.
+The actual code is the patches in [`packaging/`](packaging/), a handful of commits on top of htop 3.5.3. I keep the commits themselves in a separate htop clone and export them from there. I try to keep it close to upstream htop and follow their style, so moving to a new htop release is mostly a rebase.
 
-This repo has everything around it:
+This repo has everything:
 
-- `packaging/` has the PKGBUILD and the patches exported from that branch
+- `packaging/` has the PKGBUILD and the patches, one per commit
 - `tools/` has the test scripts. There's quite a few, because I wanted to see these meters behave when files go missing, the card goes to sleep or permissions change, not just on a good day
 - `PLAN.md` has the design notes and what I measured on the hardware
 - `CHANGELOG.md` and `AUDIT.md` are the history and the review notes
@@ -98,4 +98,4 @@ I wrote this with a lot of help from AI coding agents (Claude and Codex), and ke
 
 ## License
 
-GPL 2.0 or later, same as htop. All the credit for htop itself goes to the htop developers.
+GPL 2.0 or later, same as htop (see [LICENSE](LICENSE)). All the credit for htop itself goes to the htop developers.

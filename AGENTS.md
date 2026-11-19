@@ -46,7 +46,8 @@ AUDIT.md (findings 20-24).
 ## Layout
 
 - This folder is its own git repo: plan, docs, `tools/`, later `packaging/`.
-  Branch `main`, remote `origin` = https://github.com/orlfman/htop-gpu (private).
+  Branch `main`, remote `origin` = https://github.com/orlfman/htop-gpu (public since 2026-11-19;
+  README and PKGBUILD point at `packaging/`, not at the private htop clone).
 - `src/htop` is a separate git clone of htop, branch `amdgpu-meters` on top of tag
   `3.5.3`. All htop code changes are commits there. The outer repo ignores `src/`.
   Remotes: `upstream` = https://github.com/htop-dev/htop, `origin` =
