@@ -8,8 +8,8 @@ to know lives in this folder, never only in one agent's private memory.
 
 A personal custom build of htop 3.5.3 with header meters for AMD dedicated cards
 (RDNA 2, 3 and 4: RX 6000, 7000 and 9000; developed and tested on an RX 9070 XT,
-the others only against fake sysfs trees; htop `f842f486`, `7c2fe84b`, `943464c0`; installed as
-3.5.3-16):
+the others only against fake sysfs trees; htop `f842f486`, `7c2fe84b`, `943464c0`, `c3a0d73c`; installed as
+3.5.3-17):
 GPU usage, VRAM, power, edge/junction/memory temperatures, GPU clock, VRAM clock,
 video engine. Not meant for upstream htop, but kept as close to upstream as
 possible so new htop releases are easy to rebase onto.
@@ -26,8 +26,8 @@ Finding 8 is fixed: known Intel PID/starttime/FD ownership survives access gaps,
 so lost access does not become a false zero. Tests cover aliases, exit, and reuse.
 The Intel source is committed as `bb4f7331` (reviewed 2026-10-29); patch 0010 is
 exported from it like the others.
-Committed as htop `c3a0d73c` and packaged as 3.5.3-17 (patch 0016; not yet
-installed, 2026-11-19): the Intel meters cover Tiger Lake, Rocket Lake, Alder
+Committed as htop `c3a0d73c` and packaged as 3.5.3-17 (patch 0016; installed
+2026-11-19): the Intel meters cover Tiger Lake, Rocket Lake, Alder
 Lake and newer integrated families (109 PCI IDs from the Linux 7.3 lists) on
 both `i915` and `xe`, selecting the supported iGPU with the lowest PCI address.
 Discrete Intel graphics, including DG1 and Arc, and earlier integrated families

@@ -4,6 +4,10 @@ Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
 
+## 2026-11-19, Claude Code (Claude Opus 5.5) — build and install 3.5.3-17
+
+Installed at the user's request. `makepkg -fC` built `htop-gpu-3.5.3-17-x86_64.pkg.tar.zst` from outer `a95ec50` / htop `c3a0d73c`. namcap reports the same three messages as 3.5.3-16: hicolor-icon-theme, implicit glibc, and libnl possibly unneeded. The user ran `sudo pacman -U` in the Terminal panel. `pacman -Q`: htop-gpu 3.5.3-17. `htop-gpu --version`: 3.5.3-17-gpu. The installed binary is identical to the package's, and `pacman -Qkk` shows 0 altered files. A capture with a copy of the user's htop-gpurc showed every meter. With the iGPU idle it read `sleep`; during an `h264_vaapi` encode it read heading `Intel iGPU`, usage 0%, clock 2000MHz, mem 85.7M and Vid 32% E/D. The user's config hash was unchanged. Install-record doc edits are uncommitted; nothing pushed.
+
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — commit the 3.5.3-17 Intel series
 
 Committed at the user's request, not pushed. `src/htop` `amdgpu-meters`: `c3a0d73c` "linux: extend Intel integrated graphics support" (Codex's implementation with fixes for findings 20-24, the same `IntelGPU.c` as verified). `tools/export-patches.sh` regenerated all 16 patches: 0001-0015 changed only in their `[PATCH nn/16]` numbering, 0016 is now a real format-patch, and the PKGBUILD checksums were updated. Applying the series to a fresh `git archive 3.5.3` reproduces the whole `amdgpu-meters` tree with no rejects, and all 16 checksums match. Updated AGENTS.md, PLAN.md and the AUDIT.md status lines from uncommitted to `c3a0d73c`. No package was built or installed (installed: 3.5.3-16).

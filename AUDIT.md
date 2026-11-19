@@ -7,7 +7,7 @@ Findings 9-13 (P3, heading meters, Claude Code self-audit 2026-10-29): 9, 10, 11
 Finding 14 (P3, heading color-test environment isolation) is fixed and validated locally. See the resolution below.
 Findings 15-16 (P2/P3, RDNA 2+ AMD sensor and clock recovery) are fixed and verified (squashed into htop `f842f486` and `7c2fe84b`; packaged in 3.5.3-15).
 Findings 17-19 (P2/P3, AMD runtime power state, upstream checker, display-mode docs) are fixed and verified (17 in htop `943464c0`, 18-19 in this repo's tools and docs, outer `bc4e168`; installed in 3.5.3-16).
-Findings 20-22 (P2/P3, Xe timestamp stalls, compute-only Xe, live Vulkan device) are fixed and verified (htop `c3a0d73c`, packaged in 3.5.3-17; not yet installed).
+Findings 20-22 (P2/P3, Xe timestamp stalls, compute-only Xe, live Vulkan device) are fixed and verified (htop `c3a0d73c`, installed in 3.5.3-17 on 2026-11-19).
 Finding 23 (P2, generic-only fdinfo on a matched Intel GPU descriptor produces false zeros) is fixed and verified (htop `c3a0d73c`, 3.5.3-17).
 Finding 24 (P3, an O_PATH handle on the iGPU node makes usage and video N/A after the finding 23 fix; Claude Code, 2026-11-19) is fixed and verified (htop `c3a0d73c`, 3.5.3-17).
 P2 means normal priority; P3 means low priority.
