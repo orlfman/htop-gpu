@@ -4,6 +4,10 @@ Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
 
+## 2026-11-19, Claude Code (Claude Opus 5.5) — push
+
+- Pushed at the user's request: `src/htop` `amdgpu-meters` `943464c0..c3a0d73c` to orlfman/htop, and this repo's `main` `e593453..d847487` (a95ec50, d847487) to orlfman/htop-gpu, followed by this record commit. Both were fast-forwards; no force push. Nothing else changed.
+
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — build and install 3.5.3-17
 
 Installed at the user's request. `makepkg -fC` built `htop-gpu-3.5.3-17-x86_64.pkg.tar.zst` from outer `a95ec50` / htop `c3a0d73c`. namcap reports the same three messages as 3.5.3-16: hicolor-icon-theme, implicit glibc, and libnl possibly unneeded. The user ran `sudo pacman -U` in the Terminal panel. `pacman -Q`: htop-gpu 3.5.3-17. `htop-gpu --version`: 3.5.3-17-gpu. The installed binary is identical to the package's, and `pacman -Qkk` shows 0 altered files. A capture with a copy of the user's htop-gpurc showed every meter. With the iGPU idle it read `sleep`; during an `h264_vaapi` encode it read heading `Intel iGPU`, usage 0%, clock 2000MHz, mem 85.7M and Vid 32% E/D. The user's config hash was unchanged. Install-record doc edits are uncommitted; nothing pushed.
