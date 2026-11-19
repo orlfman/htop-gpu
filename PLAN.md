@@ -83,6 +83,14 @@ fallback pass. Patches and installed files match the reviewed source. See AUDIT.
 Planned next: the rest of [AMD meters for any AMD GPU](PLAN-AMD-AGNOSTIC.md)
 (APUs, older cards, card selection).
 
+Intel iGPU compatibility (2026-11-19): htop `c3a0d73c` and package recipe 3.5.3-17 (patch 0016) support Tiger Lake, Rocket Lake, Alder Lake and the later integrated families listed in the README on i915 and xe. The 270K Plus passed live tests. Other families passed fixture tests. Committed locally, not pushed; installed htop-gpu is still 3.5.3-16. See AUDIT.md.
+
+Intel compatibility audit (2026-11-19): findings 20–24 are fixed and verified in htop `c3a0d73c`. See AUDIT.md for reproductions and coverage.
+
+Tiger Lake and Rocket Lake audit (2026-11-19): finding 23 is fixed and verified in the 3.5.3-17 working tree. See AUDIT.md for the generic-only fdinfo reproduction and validated device/driver coverage.
+
+Intel descriptor audit (2026-11-19): finding 24 is fixed in the 3.5.3-17 tree and verified on the 270K Plus. See AUDIT.md for the paired live result and regression coverage.
+
 In progress: nobody.
 
 GitHub (both private): https://github.com/orlfman/htop-gpu (this folder) and

@@ -1,0 +1,416 @@
+From c3a0d73ce3fc803285e6579da6bcf5e1c1a95800 Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 13:16:01 -0700
+Subject: [PATCH 16/16] linux: extend Intel integrated graphics support
+
+The Intel sampler only accepted the Arrow Lake iGPU (8086:7d67) on
+i915. Accept the 109 integrated graphics IDs that Linux 7.3 lists for
+Tiger Lake, Rocket Lake, Alder Lake, Raptor Lake, Meteor Lake, Arrow
+Lake, Lunar Lake, Panther Lake, Wildcat Lake and Nova Lake, bound to
+either i915 or xe. Discrete cards (DG1, Arc) and older integrated
+families stay "not found". With more than one candidate the lowest
+PCI address wins.
+
+On xe, utilization is the ratio of drm-cycles-<class> to
+drm-total-cycles-<class> deltas, with each busy value kept paired
+with its GPU timestamp: a stalled timestamp keeps the last usable
+pair, and a timestamp that goes backwards starts a new interval.
+Allocated memory is drm-total-system plus drm-total-gtt. The
+requested clock comes from freq0 of the GT that has render or compute
+engines.
+
+The engine inventory (card/engine on i915, tile0/gtN/engines on xe)
+tells which graphics classes exist, so a GPU with only render or only
+compute engines reports utilization from that class, while a missing
+counter for a class that exists stays N/A. Without a gt/gt0 directory,
+i915's card-level gt_cur_freq_mhz and gt_max_freq_mhz are used.
+
+A descriptor on the selected GPU's node whose fdinfo lacks the driver,
+a valid PCI address or a client ID marks the scan incomplete instead
+of being skipped as a foreign client, which showed false zeros.
+O_PATH references with no drm- keys are not clients and are ignored.
+
+Co-Authored-By: OpenAI Codex (GPT-6.2 Astra) <noreply@openai.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ linux/IntelGPU.c | 225 +++++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 186 insertions(+), 39 deletions(-)
+
+diff --git a/linux/IntelGPU.c b/linux/IntelGPU.c
+index 4b1d3258..2c8f5a66 100644
+--- a/linux/IntelGPU.c
++++ b/linux/IntelGPU.c
+@@ -12,6 +12,7 @@ in the source distribution for its full text.
+ #include <ctype.h>
+ #include <dirent.h>
+ #include <errno.h>
++#include <fcntl.h>
+ #include <math.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+@@ -47,6 +48,8 @@ enum IntelGPUEngine_ {
+ };
+ 
+ typedef struct IntelGPUDevice_ {
++   bool xe;
++   unsigned int graphicsEngines;
+    char pci[16];
+    char dir[1024];
+    char card[1024];
+@@ -59,6 +62,7 @@ typedef struct IntelGPUDevice_ {
+ typedef struct IntelGPUObservation_ {
+    uint64_t id;
+    uint64_t value[INTELGPU_ENGINE_COUNT];
++   uint64_t totalCycles[INTELGPU_ENGINE_COUNT];
+    uint64_t memory;
+    unsigned int mask;
+    unsigned int capacity[INTELGPU_ENGINE_COUNT];
+@@ -72,7 +76,7 @@ typedef struct IntelGPUClient_ {
+    uint64_t seen;
+    IntelGPUObservation current;
+    uint64_t previous[INTELGPU_ENGINE_COUNT];
+-   uint64_t previousMs[INTELGPU_ENGINE_COUNT];
++   uint64_t previousTime[INTELGPU_ENGINE_COUNT];
+    unsigned int previousCapacity[INTELGPU_ENGINE_COUNT];
+    unsigned int previousValid;
+    struct IntelGPUClient_* next;
+@@ -99,6 +103,15 @@ typedef struct IntelGPUProcess_ {
+ static const char* const IntelGPU_engineKeys[INTELGPU_ENGINE_COUNT] = {
+    "drm-engine-render", "drm-engine-compute", "drm-engine-video",
+ };
++static const char* const IntelGPU_cycleKeys[INTELGPU_ENGINE_COUNT] = {
++   "drm-cycles-rcs", "drm-cycles-ccs", "drm-cycles-vcs",
++};
++static const char* const IntelGPU_totalKeys[INTELGPU_ENGINE_COUNT] = {
++   "drm-total-cycles-rcs", "drm-total-cycles-ccs", "drm-total-cycles-vcs",
++};
++static const char* const IntelGPU_xeCapacityKeys[INTELGPU_ENGINE_COUNT] = {
++   "drm-engine-capacity-rcs", "drm-engine-capacity-ccs", "drm-engine-capacity-vcs",
++};
+ static const char* const IntelGPU_capacityKeys[INTELGPU_ENGINE_COUNT] = {
+    "drm-engine-capacity-render", "drm-engine-capacity-compute", "drm-engine-capacity-video",
+ };
+@@ -310,24 +323,60 @@ static void IntelGPU_resetSample(void) {
+    };
+ }
+ 
++/* Integrated client graphics IDs from Linux 7.3 include/drm/intel/pciids.h. */
++static bool IntelGPU_supported(uint64_t product) {
++   static const uint16_t ids[] = {
++      /* Tiger Lake GT1 and GT2 */
++      0x9a60, 0x9a68, 0x9a70, 0x9a40, 0x9a49, 0x9a59, 0x9a78, 0x9ac0,
++      0x9ac9, 0x9ad9, 0x9af8,
++      /* Rocket Lake */
++      0x4c80, 0x4c8a, 0x4c8b, 0x4c8c, 0x4c90, 0x4c9a,
++      /* Alder Lake */
++      0x4680, 0x4682, 0x4688, 0x468a, 0x468b, 0x4690, 0x4692, 0x4693,
++      0x46a0, 0x46a1, 0x46a2, 0x46a3, 0x46a6, 0x46a8, 0x46aa, 0x462a,
++      0x4626, 0x4628, 0x46b0, 0x46b1, 0x46b2, 0x46b3, 0x46c0, 0x46c1,
++      0x46c2, 0x46c3, 0x46d0, 0x46d1, 0x46d2, 0x46d3, 0x46d4,
++      /* Raptor Lake and refresh */
++      0xa780, 0xa781, 0xa782, 0xa783, 0xa788, 0xa789, 0xa78a, 0xa78b,
++      0xa721, 0xa7a1, 0xa7a9, 0xa7ac, 0xa7ad, 0xa720, 0xa7a0, 0xa7a8,
++      0xa7aa, 0xa7ab,
++      /* Meteor Lake */
++      0x7d40, 0x7d45, 0x7d55, 0x7d60, 0x7dd5,
++      /* Arrow Lake */
++      0x7d51, 0x7dd1, 0x7d41, 0x7d67, 0xb640,
++      /* Lunar Lake */
++      0x6420, 0x64a0, 0x64b0,
++      /* Panther Lake and Wildcat Lake */
++      0xb080, 0xb081, 0xb082, 0xb083, 0xb084, 0xb085, 0xb086, 0xb087,
++      0xb08f, 0xb090, 0xb0a0, 0xb0b0, 0xfd80, 0xfd81,
++      /* Nova Lake */
++      0xd740, 0xd741, 0xd742, 0xd743, 0xd745, 0xd74a, 0xd74b, 0xd750,
++      0xd751, 0xd752, 0xd753, 0xd754, 0xd755, 0xd756, 0xd757, 0xd75f,
++   };
++   for (size_t i = 0; i < ARRAYSIZE(ids); i++)
++      if (product == ids[i])
++         return true;
++   return false;
++}
++
+ /* Metadata only: no DRM node is opened and no hardware counter is read here. */
+-static bool IntelGPU_findDevice(IntelGPUDevice* found) {
+-   DIR* dir = opendir(INTELGPU_SYSFS_ROOT "/bus/pci/drivers/i915");
++static void IntelGPU_findDevice(IntelGPUDevice* found, bool xe) {
++   const char* driverDir = xe ? INTELGPU_SYSFS_ROOT "/bus/pci/drivers/xe" : INTELGPU_SYSFS_ROOT "/bus/pci/drivers/i915";
++   DIR* dir = opendir(driverDir);
+    if (!dir) {
+       if (errno == EACCES || errno == EPERM)
+          sample.status = INTELGPU_NO_ACCESS;
+-      return false;
++      return;
+    }
+-   bool present = false;
+    const struct dirent* entry;
+    while ((entry = readdir(dir))) {
+       if (!IntelGPU_pciName(entry->d_name))
+          continue;
+-      IntelGPUDevice candidate = {0};
+-      xSnprintf(candidate.dir, sizeof(candidate.dir), INTELGPU_SYSFS_ROOT "/bus/pci/drivers/i915/%s", entry->d_name);
++      IntelGPUDevice candidate = { .xe = xe };
++      xSnprintf(candidate.dir, sizeof(candidate.dir), "%s/%s", driverDir, entry->d_name);
+       uint64_t vendor, product;
+       if (!IntelGPU_readUnsigned(candidate.dir, "vendor", 0, &vendor) || vendor != 0x8086 ||
+-            !IntelGPU_readUnsigned(candidate.dir, "device", 0, &product) || product != 0x7d67)
++            !IntelGPU_readUnsigned(candidate.dir, "device", 0, &product) || !IntelGPU_supported(product))
+          continue;
+       char path[2048];
+       xSnprintf(path, sizeof(path), "%s/drm", candidate.dir);
+@@ -359,13 +408,10 @@ static bool IntelGPU_findDevice(IntelGPUDevice* found) {
+       candidate.fsDevice = st.st_dev;
+       candidate.inode = st.st_ino;
+       xSnprintf(candidate.pci, sizeof(candidate.pci), "%s", entry->d_name);
+-      if (!present || strcmp(candidate.pci, found->pci) < 0) {
++      if (!found->pci[0] || strcmp(candidate.pci, found->pci) < 0)
+          *found = candidate;
+-         present = true;
+-      }
+    }
+    closedir(dir);
+-   return present;
+ }
+ 
+ static bool IntelGPU_memory(const char* text, uint64_t* bytes) {
+@@ -388,9 +434,13 @@ static bool IntelGPU_memory(const char* text, uint64_t* bytes) {
+ }
+ 
+ static int IntelGPU_parse(char* buffer, IntelGPUObservation* out) {
+-   char driver[32] = "";
+-   char pci[32] = "";
++   const char* driver = "";
++   const char* pci = "";
+    bool idValid = false;
++   bool pathOnly = false, hasDrmKey = false;
++   unsigned int totalMask = 0;
++   uint64_t system = 0, gtt = 0;
++   bool systemValid = false, gttValid = false;
+    *out = (IntelGPUObservation) {
+       .capacity = {1, 1, 1}, .capacityValid = INTELGPU_ALL_ENGINES,
+    };
+@@ -403,27 +453,36 @@ static int IntelGPU_parse(char* buffer, IntelGPUObservation* out) {
+       char* text = IntelGPU_trim(delim + 1);
+       uint64_t value;
+       const char* unit;
++      if (!String_startsWith(line, "drm-")) {
++         if (String_eq(line, "flags"))
++            pathOnly = IntelGPU_number(text, 8, &value, &unit) && !*unit && (value & O_PATH);
++         continue;
++      }
++      hasDrmKey = true;
+       if (String_eq(line, "drm-driver")) {
+-         if (strlen(text) >= sizeof(driver))
+-            return false;
+-         xSnprintf(driver, sizeof(driver), "%s", text);
++         driver = text;
+       } else if (String_eq(line, "drm-pdev")) {
+-         if (strlen(text) >= sizeof(pci))
+-            return false;
+-         xSnprintf(pci, sizeof(pci), "%s", text);
++         pci = text;
+       } else if (String_eq(line, "drm-client-id")) {
+          idValid = IntelGPU_number(text, 10, &out->id, &unit) && !*unit;
+-      } else if (String_eq(line, "drm-total-system0")) {
++      } else if (device.xe && String_eq(line, "drm-total-system")) {
++         systemValid = IntelGPU_memory(text, &system);
++      } else if (device.xe && String_eq(line, "drm-total-gtt")) {
++         gttValid = IntelGPU_memory(text, &gtt);
++      } else if (!device.xe && String_eq(line, "drm-total-system0")) {
+          out->memoryValid = IntelGPU_memory(text, &out->memory);
+       } else {
+          for (size_t e = 0; e < INTELGPU_ENGINE_COUNT; e++) {
+             unsigned int bit = 1U << e;
+-            if (String_eq(line, IntelGPU_engineKeys[e])) {
+-               if (IntelGPU_number(text, 10, &value, &unit) && String_eq(unit, "ns")) {
++            if (String_eq(line, device.xe ? IntelGPU_cycleKeys[e] : IntelGPU_engineKeys[e])) {
++               if (IntelGPU_number(text, 10, &value, &unit) && String_eq(unit, device.xe ? "" : "ns")) {
+                   out->value[e] = value;
+                   out->mask |= bit;
+                }
+-            } else if (String_eq(line, IntelGPU_capacityKeys[e])) {
++            } else if (device.xe && String_eq(line, IntelGPU_totalKeys[e])) {
++               if (IntelGPU_number(text, 10, &out->totalCycles[e], &unit) && !*unit)
++                  totalMask |= bit;
++            } else if (String_eq(line, device.xe ? IntelGPU_xeCapacityKeys[e] : IntelGPU_capacityKeys[e])) {
+                if (!IntelGPU_number(text, 10, &value, &unit) || *unit || !value || value > 1024 ||
+                      ((out->capacityExplicit & bit) && out->capacity[e] != value)) {
+                   out->capacityValid &= ~bit;
+@@ -435,9 +494,26 @@ static int IntelGPU_parse(char* buffer, IntelGPUObservation* out) {
+          }
+       }
+    }
+-   if (!String_eq(driver, "i915") || !String_eq(pci, device.pci))
++   /* A path-only reference to the DRM node has no client or counters. */
++   if (pathOnly && !hasDrmKey)
++      return 0;
++
++   /* The descriptor matched a device node before fdinfo was read. */
++   if (*driver && !String_eq(driver, device.xe ? "xe" : "i915"))
+       return 0;
+-   return idValid ? 1 : -1;
++   bool pciValid = IntelGPU_pciName(pci);
++   if (pciValid && !String_eq(pci, device.pci))
++      return 0;
++   if (!*driver || !pciValid || !idValid)
++      return -1;
++   if (device.xe) {
++      out->mask &= totalMask;
++      if (systemValid && gttValid && system <= UINT64_MAX - gtt) {
++         out->memory = system + gtt;
++         out->memoryValid = true;
++      }
++   }
++   return 1;
+ }
+ 
+ static void IntelGPU_observe(const IntelGPUObservation* observation) {
+@@ -462,8 +538,11 @@ static void IntelGPU_observe(const IntelGPUObservation* observation) {
+    for (size_t e = 0; e < INTELGPU_ENGINE_COUNT; e++) {
+       unsigned int bit = 1U << e;
+       if (observation->mask & bit) {
+-         if (!(current->mask & bit) || observation->value[e] > current->value[e])
++         if (!(current->mask & bit) || (device.xe ? observation->totalCycles[e] >= current->totalCycles[e] :
++                                        observation->value[e] > current->value[e])) {
+             current->value[e] = observation->value[e];
++            current->totalCycles[e] = observation->totalCycles[e];
++         }
+          current->mask |= bit;
+       }
+       if (observation->capacityExplicit & bit) {
+@@ -567,16 +646,21 @@ static void IntelGPU_finishClients(uint64_t monotonicMs) {
+                continue;
+             }
+             bool previous = (client->previousValid & bit) && client->previousCapacity[e] == current->capacity[e];
+-            if (previous && current->value[e] < client->previous[e]) {
+-               /* The ABI allows temporary backward reports: retain the high-water mark and its time. */
++            uint64_t now = device.xe ? current->totalCycles[e] : monotonicMs;
++            if (previous && now < client->previousTime[e])
++               previous = false;
++            /* Retain the paired baseline across stalled clocks and temporarily backward busy reports. */
++            if (previous && (now == client->previousTime[e] || current->value[e] < client->previous[e])) {
+                complete[e] = false;
+                continue;
+             }
+-            double elapsed = (double)(monotonicMs - client->previousMs[e]) * 1000000.0;
++            double elapsed = previous ? (double)(now - client->previousTime[e]) : 0.0;
++            if (!device.xe)
++               elapsed *= 1000000.0;
+             if (previous && elapsed > 0.0) {
+                double delta = (double)(current->value[e] - client->previous[e]);
+                /* Driver accounting isn't synchronized to this clock; allow bounded overshoot, not gross jumps. */
+-               if (delta > elapsed * current->capacity[e] * INTELGPU_ACCOUNTING_SLACK + 1000000.0) {
++               if (delta > elapsed * current->capacity[e] * INTELGPU_ACCOUNTING_SLACK + (device.xe ? 0.0 : 1000000.0)) {
+                   client->previousValid &= ~bit;
+                   complete[e] = false;
+                   continue;
+@@ -586,7 +670,7 @@ static void IntelGPU_finishClients(uint64_t monotonicMs) {
+                complete[e] = false;
+             }
+             client->previous[e] = current->value[e];
+-            client->previousMs[e] = monotonicMs;
++            client->previousTime[e] = now;
+             client->previousCapacity[e] = current->capacity[e];
+             client->previousValid |= bit;
+          }
+@@ -607,8 +691,13 @@ static void IntelGPU_finishClients(uint64_t monotonicMs) {
+          sample.videoRaw = rates[INTELGPU_VIDEO];
+          sample.video = MINIMUM(100.0, sample.videoRaw);
+       }
+-      if (isNonnegative(sample.render) && isNonnegative(sample.compute))
+-         sample.usage = MINIMUM(100.0, sample.render + sample.compute);
++      double render = sample.render, compute = sample.compute;
++      if (device.graphicsEngines == (1U << INTELGPU_RENDER) && !isNonnegative(compute))
++         compute = 0.0;
++      if (device.graphicsEngines == (1U << INTELGPU_COMPUTE) && !isNonnegative(render))
++         render = 0.0;
++      if (isNonnegative(render) && isNonnegative(compute))
++         sample.usage = MINIMUM(100.0, render + compute);
+    }
+    sample.videoCapacity = capacityValid[INTELGPU_VIDEO] ? capacity[INTELGPU_VIDEO] : 0;
+    procScanned = true;
+@@ -692,10 +781,71 @@ static void IntelGPU_readClients(uint64_t monotonicMs) {
+    IntelGPU_finishClients(monotonicMs);
+ }
+ 
++/* Zero means no confirmed graphics engine inventory. */
++static unsigned int IntelGPU_graphicsEngines(const char* path, bool xe) {
++   DIR* dir = opendir(path);
++   if (!dir)
++      return 0;
++   unsigned int engines = 0;
++   const struct dirent* entry;
++   errno = 0;
++   while ((entry = readdir(dir))) {
++      const char* name = entry->d_name;
++      if (String_startsWith(name, "rcs") && (xe ? !name[3] : IntelGPU_digits(name + 3)))
++         engines |= 1U << INTELGPU_RENDER;
++      if (String_startsWith(name, "ccs") && (xe ? !name[3] : IntelGPU_digits(name + 3)))
++         engines |= 1U << INTELGPU_COMPUTE;
++   }
++   bool valid = errno == 0;
++   closedir(dir);
++   return valid ? engines : 0;
++}
++
++static void IntelGPU_readTopology(void) {
++   char path[2048];
++   if (!device.xe) {
++      xSnprintf(path, sizeof(path), "%s/engine", device.card);
++      device.graphicsEngines = IntelGPU_graphicsEngines(path, false);
++      xSnprintf(path, sizeof(path), "%s/gt/gt0", device.card);
++      struct stat st;
++      if (stat(path, &st) < 0 && errno == ENOENT) {
++         sample.clock = IntelGPU_readNumber(device.card, "gt_cur_freq_mhz", 10);
++         sample.clockMax = IntelGPU_readNumber(device.card, "gt_max_freq_mhz", 10);
++      } else {
++         sample.clock = IntelGPU_readNumber(path, "rps_cur_freq_mhz", 10);
++         sample.clockMax = IntelGPU_readNumber(path, "rps_max_freq_mhz", 10);
++      }
++      return;
++   }
++
++   /* Client iGPUs have one tile. Locate its graphics GT by render or compute engines. */
++   xSnprintf(path, sizeof(path), "%s/tile0", device.dir);
++   DIR* tile = opendir(path);
++   if (!tile)
++      return;
++   const struct dirent* entry;
++   while ((entry = readdir(tile))) {
++      const char* name = entry->d_name;
++      if (!String_startsWith(name, "gt") || !IntelGPU_digits(name + 2))
++         continue;
++      xSnprintf(path, sizeof(path), "%s/tile0/%s/engines", device.dir, name);
++      device.graphicsEngines = IntelGPU_graphicsEngines(path, true);
++      if (!device.graphicsEngines)
++         continue;
++      xSnprintf(path, sizeof(path), "%s/tile0/%s/freq0", device.dir, name);
++      sample.clock = IntelGPU_readNumber(path, "cur_freq", 10);
++      sample.clockMax = IntelGPU_readNumber(path, "max_freq", 10);
++      break;
++   }
++   closedir(tile);
++}
++
+ static void IntelGPU_refresh(uint64_t monotonicMs) {
+    IntelGPU_resetSample();
+    IntelGPUDevice found = {0};
+-   if (!IntelGPU_findDevice(&found)) {
++   IntelGPU_findDevice(&found, false);
++   IntelGPU_findDevice(&found, true);
++   if (!found.pci[0]) {
+       IntelGPU_clearClients();
+       IntelGPU_clearProcesses();
+       memset(&device, 0, sizeof(device));
+@@ -726,10 +876,7 @@ static void IntelGPU_refresh(uint64_t monotonicMs) {
+       return;
+    }
+    sample.status = INTELGPU_ACTIVE;
+-   char gt[2048];
+-   xSnprintf(gt, sizeof(gt), "%s/gt/gt0", device.card);
+-   sample.clock = IntelGPU_readNumber(gt, "rps_cur_freq_mhz", 10);
+-   sample.clockMax = IntelGPU_readNumber(gt, "rps_max_freq_mhz", 10);
++   IntelGPU_readTopology();
+    IntelGPU_readClients(monotonicMs);
+ }
+ 

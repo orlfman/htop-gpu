@@ -1,11 +1,184 @@
 # htop-gpu audit findings
 
-Original audit: 2026-10-28 (America/Phoenix). Latest full patch audit: 2026-11-10.
-Auditor: Codex.
+Original audit: 2026-10-28 (America/Phoenix). Latest full project audit: 2026-11-11 (Codex). Latest audit: 2026-11-19 (Claude Code, finding 24 in the Intel descriptor scan, subsequently fixed and verified by Codex).
+Auditors: Codex and Claude Code. Newest sections are at the top; the 2026-10-28 audit and older follow-ups start at "Scope and baseline".
 Status: findings 1-6 are resolved and validated; finding 6 is committed (`6c06d243`) and retained in installed `htop-gpu 3.5.3-12`, which labels CPU power Pwr. Finding 7 (P3) is deferred at the user's request. Finding 8 (P2, Intel client access loss reported as zero) is fixed and validated in 3.5.3-12; see the fix validation below.
 Findings 9-13 (P3, heading meters, Claude Code self-audit 2026-10-29): 9, 10, 11 and 13 are fixed (htop `44265679`, `798d8cfa`; installed in 3.5.3-13), 12 is accepted; see the last two sections.
 Finding 14 (P3, heading color-test environment isolation) is fixed and validated locally. See the resolution below.
+Findings 15-16 (P2/P3, RDNA 2+ AMD sensor and clock recovery) are fixed and verified (squashed into htop `f842f486` and `7c2fe84b`; packaged in 3.5.3-15).
+Findings 17-19 (P2/P3, AMD runtime power state, upstream checker, display-mode docs) are fixed and verified (17 in htop `943464c0`, 18-19 in this repo's tools and docs, outer `bc4e168`; installed in 3.5.3-16).
+Findings 20-22 (P2/P3, Xe timestamp stalls, compute-only Xe, live Vulkan device) are fixed and verified (htop `c3a0d73c`, packaged in 3.5.3-17; not yet installed).
+Finding 23 (P2, generic-only fdinfo on a matched Intel GPU descriptor produces false zeros) is fixed and verified (htop `c3a0d73c`, 3.5.3-17).
+Finding 24 (P3, an O_PATH handle on the iGPU node makes usage and video N/A after the finding 23 fix; Claude Code, 2026-11-19) is fixed and verified (htop `c3a0d73c`, 3.5.3-17).
 P2 means normal priority; P3 means low priority.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — independent verification of the finding 24 fix
+
+Audited the uncommitted 3.5.3-17 tree after Codex's fix. The only source change since my previous audit is in `IntelGPU_parse()`. Non-`drm-` lines are skipped except `flags`, which is parsed as octal and checked for `O_PATH` (with `<fcntl.h>` added). A record with `O_PATH` set and no `drm-` key returns 0, meaning not a client. All other generic-only or partial records still return -1, so finding 23 stays fixed.
+
+Findings: none. Finding 24 is confirmed resolved.
+
+- Live re-run of my finding 24 probe on the 270K Plus (i915, light `h264_vaapi` encode, ASan/UBSan standalone samplers, 5 ticks each). The pre-fix sampler showed N/A / N/A / incomplete with an `O_PATH` holder, with and without `O_CLOEXEC`. The fixed sampler showed 0 / 2.1–2.2% / complete in both cases, the same as with no holder. A real idle `O_RDWR` handle gave valid zeros on both.
+- Tests: the new stateful scenario captures real kernel fdinfo from an `O_PATH` handle. It covers a path handle beside a real client, the path handle alone (idle zeros), malformed octal flags and partial DRM metadata, the last two staying unknown.
+- Build: no warnings. STYLE OK (IWYU accepts `<fcntl.h>`). `git diff --check` is clean in both repos.
+- `test-intel-gpu.py --mutations`: 250 ok, ALL PASSED, all three negative controls caught. Live peaks: encode 33.3%, decode 18.5%, graphics 100%. `test-sampler.py`: 198 ok, ALL PASSED.
+- Packaging: applying the PKGBUILD's 16 patches in order to a fresh `git archive 3.5.3` produced no rejects, the result is byte-identical to the working `IntelGPU.c`, and all 16 checksums match.
+
+Limits: only i915 on the 270K Plus was tested live. xe uses the same parser path but was not run against a real `O_PATH` holder. No package was built or installed (installed: 3.5.3-16).
+
+## 2026-11-19, Codex — verified fix for finding 24
+
+The sampler ignores a matched descriptor when its Linux fdinfo contains valid octal flags with O_PATH set and has no DRM fields. An ordinary descriptor with missing client statistics still makes utilization unavailable, as required by finding 23.
+
+The new regression reads flags from a real path-only descriptor. Three assertions failed on the previous sampler. With the fix, an idle device reports zero, a separate busy client reports 20% render and 10% video, and malformed flags or partial DRM data still report unavailable. On the Core Ultra 7 270K Plus, the original sampler reported video unavailable while the fixed sampler measured encoding activity in seven of eight paired samples with the same path-only handle open.
+
+All 250 Intel and 198 AMD checks passed, along with build, style and sanitized display checks. The 16 package patches applied cleanly with matching checksums and reproduced the tested IntelGPU.c byte for byte. Tiger Lake and Rocket Lake coverage used fixtures.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — audit of the finding 23 fix
+
+Audited the uncommitted 3.5.3-17 tree after Codex's finding 23 fix. The only source change since my previous audit is in `IntelGPU_parse()`. My previous re-audit missed finding 23, which was pre-existing parser behavior, and Codex's catch is valid.
+
+The fix is correct for the case it targets. `driver` and `pci` now point into the `strsep`-split buffer, which stays valid for the whole call. An explicit foreign driver or a valid foreign PCI address is still ignored. A missing driver, a missing or malformed PCI address, or a missing client ID now returns -1, so the scan is marked incomplete instead of reading as a false zero.
+
+### 24 (P3) — an O_PATH handle on the iGPU node makes usage and video N/A
+
+`IntelGPU_drmFile()` matches descriptors by `stat()` on `/proc/<pid>/fd/<n>`, which follows the link to the device node. An `O_PATH` descriptor on `/dev/dri/renderD128` therefore matches: it is `S_ISCHR` with rdev 226:128. Its fdinfo has only `pos`, `flags` (`012000000`, i.e. `O_PATH|O_CLOEXEC`), `mnt_id` and `ino`, because it never went through `drm_open()` and is not a DRM client. After the finding 23 fix, `IntelGPU_parse()` returns -1 for it, and the whole device's usage and video stay N/A with `incomplete=true` for as long as the handle is open.
+
+Reproduced live on the 270K Plus (i915), with a light `h264_vaapi` encode keeping the iGPU active and the standalone ASan/UBSan sampler built from both sources:
+
+| Sampler | O_PATH holder | usage / video / incomplete (5 ticks) |
+|---|---|---|
+| pre-fix (previous audit's `IntelGPU.c`) | no | 0 / 2.0–2.8% / false |
+| pre-fix | yes | 0 / 2.0–2.6% / false |
+| fixed | no | 0 / 2.0–2.7% / false |
+| fixed | yes | **N/A / N/A / true** on every tick |
+
+Any unprivileged process can trigger this for everyone viewing the meters, but no such handle exists on this machine today: a scan of the 9 readable Intel DRM descriptors found none with generic-only fdinfo. Suggested fix: when the fdinfo has no `drm-` keys and its `flags` field has `O_PATH` (`010000000`) set, return 0 (not a client), and keep -1 for other generic-only records. Add a fixture with `flags: 012000000` next to the existing generic-only cases, and assert valid zeros under one running sampler.
+
+### Other checks
+
+- Build: no warnings. STYLE OK. `git diff --check` is clean in both repos.
+- `test-intel-gpu.py --mutations`: 244 ok, ALL PASSED, all three negative controls caught. Live peaks: encode 33.0%, decode 18.5%, graphics 100%. `test-sampler.py`: 198 ok, ALL PASSED.
+- Packaging: applying the PKGBUILD's 16 patches in order to a fresh `git archive 3.5.3` produced no rejects, the result is byte-identical to the working `IntelGPU.c`, and all 16 checksums match.
+- Side observation: an idle probe without a workload showed N/A with zero clients and nothing denied. That is the iGPU runtime-suspending between samples, which is expected and not a defect.
+
+Limits: only i915 on the 270K Plus was tested live. The O_PATH case was not tried on xe, where the parser path is the same. No package was built or installed (installed: 3.5.3-16).
+
+## 2026-11-19, Codex — finding 23 resolved
+
+Fixed the 3.5.3-17 working-tree sampler's handling of an open descriptor matched to the selected GPU. Missing identity fields or a malformed PCI address now mark the scan incomplete. A positively identified foreign device is still ignored. When the descriptor is the only potential client, usage, video and allocated memory remain unavailable until identity returns or the descriptor closes. The independent GPU clock keeps updating.
+
+Six new assertions failed on the pre-fix sampler. After the fix, both original Tiger Lake and Rocket Lake probes showed N/A on initial and repeated generic-only samples, 550 MHz throughout, 30% usage and 1 MiB after identity returned, N/A after identity was lost again, and valid zeros after closure. All 34 simulated family/driver sequences and 40 exclusion checks passed against the patch-reproduced source.
+
+The normal build, style check, 244 Intel assertions, 198 AMD assertions and a whole-program sanitized display passed. Live i915 testing on the 270K Plus confirmed FFmpeg work on the selected device. The new families and xe were exercised with fixtures. All 16 ordered package checksums matched and the patches reproduced the tested sampler without offsets or fuzz. Source, tests, packaging and records remain uncommitted. Installed version is 3.5.3-16.
+
+## 2026-11-19, Codex — audit of the Tiger Lake and Rocket Lake extension
+
+Reviewed the uncommitted 3.5.3-17 working tree over outer `e593453` and htop `943464c0`. Tested IntelGPU.c as reproduced by the package series (SHA-256 `05037101398e88318cb926879d55be29e6366795452e2d85090fec83160d8024`).
+
+### 23 (P2, subsequently resolved) — an open Intel GPU descriptor with only generic fdinfo yields false zero readings
+
+At `src/htop/linux/IntelGPU.c:493`, a missing driver or PCI field returns the same result as an explicitly foreign client. The scanner has already matched the descriptor's character-device number to the selected GPU. It silently skips the record and can finish the scan with zero clients and complete coverage. Memory then displays zero bytes, and after the first scan usage and video both display 0%. This is a pre-existing parser behavior affecting the newly recognized devices. Older i915 implementations predate the DRM-specific client fields. [Kernel commit introducing i915 fdinfo client statistics](https://git.zx2c4.com/wireguard-linux/commit/Documentation?id=055634e4b62f109a47727c2c50586e2e318595a9)
+
+Reproduced with Tiger Lake 8086:9a49 and Rocket Lake 8086:4c8a in separate stateful sanitized runs. With a matching render descriptor open, give its readable fdinfo only pos, flags, mnt_id and ino. After two ticks both families reported zero usage, video and memory, a valid 550 MHz clock and incomplete=false. Restoring complete DRM fields gave 30% usage and 1 MiB on the next usable interval. Removing the DRM fields again while keeping the descriptor open immediately returned all three client meters to zero. Closing the descriptor was the control in which zero was appropriate.
+
+A fix should mark a matched descriptor lacking a usable identity as incomplete, retain valid independent clock data, and continue ignoring explicitly foreign identities. Cover the generic-only, restored, and genuinely closed states in one running sampler.
+
+### Other checks
+
+- Expanded the kernel header macros and checked the installed 7.3.4 i915 and xe module aliases. All 17 new IDs are present on both driver lists. All 109 IDs in the sampler match the intended kernel family lists exactly.
+- Built the standalone sampler from patch-reproduced source with ASan/UBSan. Across all 34 new device/driver pairings, independently verified graphics, video, clock, allocated memory, loss of the memory field with client identity intact, and suspend/wake rebaselining. All 40 DG1 and Ice Lake device/driver exclusion checks passed.
+- Development build and style checks passed. All 232 existing Intel and 198 AMD assertions passed. Live i915 peaks on the 270K Plus were 100% graphics, 32.9% encode and 18.5% decode. All 16 ordered package patch hashes matched and patches applied to upstream 3.5.3 without offsets or fuzz.
+- The two new families and xe were tested with synthetic sysfs and proc data. No physical Tiger Lake or Rocket Lake GPU was available, and no binary package was installed.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — re-audit after the Tiger Lake and Rocket Lake extension
+
+Audited Codex's follow-up on the same uncommitted 3.5.3-17 tree. The only source change since my previous audit is 17 added IDs in `IntelGPU_supported()`; no logic changed.
+
+Findings: none.
+
+- IDs: expanding the 7.3.4 kernel's TGL, RKL and ADL through NVL-P macros with `cpp` gives 109 distinct IDs, exactly the sampler's table. None of the DG1 IDs are in it, and Ice Lake (`0x8a52`) is excluded as the tests expect.
+- Tests: the new family loops call each lambda immediately inside `scenario()`, so late binding is not an issue. Tiger Lake covers the legacy card-level clock, Rocket Lake covers the per-GT layout, and both cover render-only usage, video and memory.
+- Build: no warnings. STYLE OK. `git diff --check` is clean in both repos.
+- `test-intel-gpu.py --mutations`: 232 ok, ALL PASSED, all three negative controls caught. Live peaks: encode 33.0%, decode 18.5%, graphics 100%. `test-sampler.py`: 198 ok, ALL PASSED.
+- Packaging: applying the PKGBUILD's 16 patches in order (with the renamed `0016-linux-extend-Intel-integrated-graphics-support.patch`) to a fresh `git archive 3.5.3` produced no rejects. The result is byte-identical to the working `IntelGPU.c`. All 16 checksums match.
+
+My previous note that Tiger Lake and Rocket Lake were excluded by design no longer applies. The other notes still stand: commit the source and re-export 0016, and check Xe runtime PM on real hardware.
+
+Limits: Tiger Lake, Rocket Lake and Xe are covered by fixtures only. No binary package was built and nothing was installed (installed: 3.5.3-16).
+
+## 2026-11-19, Codex — Tiger Lake and Rocket Lake compatibility verification
+
+Tested the uncommitted 3.5.3-17 sampler and package recipe. The sampler table exactly matches all 109 distinct IDs produced by expanding the supported family macros in this host's Linux 7.3.4 headers, including 11 Tiger Lake GT1/GT2 IDs and six Rocket Lake IDs.
+
+Seven assertions in the extended tests failed against the preceding sampler. On the revised source, the stateful i915 fixtures for both families showed 35% render activity, 15% video and 2 MiB allocated. Tiger Lake exercised the legacy requested clock; Rocket Lake exercised the per-GT layout. Discovery checks also covered binding each family to xe and excluding DG1 and Ice Lake.
+
+The normal build, style check, 232 Intel assertions (including three negative controls), 198 AMD assertions and a whole-program sanitized terminal capture passed. On the Core Ultra 7 270K Plus with i915, live graphics peaked at 100%, encode at 32.6% and decode at 18.6%. All 16 ordered patch checksums matched. Applying the package series to upstream 3.5.3 with zero fuzz reproduced the tested IntelGPU.c byte for byte. No new findings in these checks. Both newly added families and xe have fixture coverage only. Installed version is 3.5.3-16.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — independent audit of Codex's Intel iGPU compatibility work
+
+Audited the uncommitted 3.5.3-17 working tree: outer `e593453` + local changes, htop `943464c0` + uncommitted `linux/IntelGPU.c` (the same file patch 0016 produces).
+
+Findings: none in the sampler, tests or packaging.
+
+Verified independently:
+
+- PCI IDs: expanded the 7.3.4 kernel's `INTEL_{ADLS,ADLP,ADLN,RPLS,RPLU,RPLP,MTL,ARL,LNL,PTL,WCL,NVLS,NVLP}_IDS` with `cpp`. The 92 IDs match the sampler's table exactly (the header writes four NVL-P IDs as uppercase `0X`).
+- Code review of the diff: the i915 path is unchanged except the render-only inventory and the legacy `gt_cur_freq_mhz` fallback. The Xe busy/total pairing, stall retention (finding 20), timer-reset rebaseline, compute-only GT selection (finding 21), system + GTT memory sum and driver/PCI filtering look correct.
+- Build: no warnings. `tools/check-style.sh`: STYLE OK. `git diff --check`: clean in both repos.
+- `test-intel-gpu.py --mutations`: 216 ok, ALL PASSED, all three negative controls caught, FFmpeg's Vulkan work was confirmed on the selected PCI device (finding 22). Live peaks: encode 32.9%, decode 18.0%, graphics 100%. `test-sampler.py`: 198 ok, ALL PASSED.
+- Packaging: reapplied all 16 patches to a fresh `git archive 3.5.3` with `patch -Np1`, no fuzz and no rejects. The resulting `IntelGPU.c` is byte-identical to the working tree. All 16 PKGBUILD checksums match.
+
+Notes, not defects:
+
+- The htop change is not committed yet, and patch 0016 is a plain `git diff` with no commit header. Once it is committed, `tools/export-patches.sh` will regenerate 0016 and its checksum. Re-run the patch check afterwards.
+- AGENTS.md "What this is" still described i915-only meters for this machine's iGPU, and this file's status header stopped at finding 14. Both were corrected later the same day.
+- The live test now accepts any supported Intel PCI address instead of requiring `0000:00:02.0`. That is fine for portability.
+- Untested on real Xe hardware: as far as I remember the kernel source (not checked here, since only headers are installed), Xe takes a runtime-PM reference when it reads fdinfo cycles and `freq0/cur_freq`. If so, refresh intervals shorter than Xe's autosuspend delay could keep an otherwise idle Xe iGPU awake. htop never wakes a suspended GPU, because it checks `runtime_status` first. This does not affect this machine, which uses i915.
+- Tiger Lake and Rocket Lake are excluded by design even though their i915 fdinfo format is the same. That is a scope choice.
+
+Limits: only the 270K Plus on i915 was tested on hardware. Xe was covered by fixtures only. No binary package was built and nothing was installed (installed: 3.5.3-16).
+
+## 2026-11-19, Codex — findings 20–22 resolved in the 3.5.3-17 working tree
+
+- **20.** Xe now retains the last usable busy/total pair while the GPU timestamp is stalled. The original four-sample probe gives N/A, N/A, 50%, 20%. Timer reset and missing-denominator cases also pass.
+- **21.** The sampler inventories render and compute engines and locates the graphics GT using either class. The original compute-only fixture now shows 50% usage and 750 MHz with a 2000 MHz limit. The separate media GT and missing-counter cases are covered by permanent tests.
+- **22.** The Vulkan test limits Mesa to the discovered PCI address and derives the Vulkan context from the corresponding VA-API render node. It checks FFmpeg’s own fdinfo for positive graphics work on that PCI device. That check passed live on the 270K Plus.
+
+Verification: 216 Intel and 198 AMD assertions passed, including the Intel mutation controls. The normal build, style checks, original sanitized probes and whole-program sanitized terminal capture passed. All 16 ordered package checksums matched and the patch series applied to upstream 3.5.3 with zero fuzz, yielding the exact tested sampler. Live peaks on i915 were 100% graphics, 32.9% encode and 18.5% decode. Xe was exercised with fixtures. No dual-Intel system was available. The working tree and packaging patch are uncommitted. The installed package is 3.5.3-16.
+
+## 2026-11-19, Codex — independent audit of Intel compatibility changes
+
+Reviewed the uncommitted 3.5.3-17 recipe and sampler on outer `e593453` and htop `943464c0`. The reviewed IntelGPU.c SHA-256 is `130c418d52343dad9e88f1450374e72c303b63d05bd7338801285af859886b1f`. Findings 20–22 were open at this audit and resolved in the subsequent validation above.
+
+### 20 (P2) — a stalled Xe timestamp can lose measured work
+
+In `src/htop/linux/IntelGPU.c:638–656`, an unchanged total-cycle counter makes the current rate unavailable, but the code still saves the newer busy counter as the next baseline. In one running sanitized sampler, the (total, busy) pairs were (1000, 100), (1000, 150), (1100, 150), (1200, 170). The sampler returned N/A, N/A, **0%**, 20%. The two endpoints around the stall show 50 busy cycles over 100 total cycles, or **50%**. The shipped stalled-timestamp test keeps render busy unchanged at the stall and subsequently resets the timer, so it does not exercise this loss. Preserve the last usable pair during a stall and compute the next positive interval from that pair. Keep the existing separate behavior for timer resets.
+
+### 21 (P3) — compute-only Xe configurations lose usage and clock
+
+In `src/htop/linux/IntelGPU.c:675–678,811–815`, utilization and requested-clock discovery both require a render engine. The kernel documents a compute-and-copy-only engine configuration. A fake integrated Lunar Lake card with compute and copy classes exposed a 750 MHz requested clock, a 2000 MHz limit and compute counters increasing by 500 of 1000 cycles. The sampler calculated 50% compute internally but returned N/A for both user-visible meters. The render-only control returned 50% and 750 MHz. Consider a graphics GT with compute engines when locating the clock and sum the engine classes verified to exist. Preserve N/A for a missing reading from a class that does exist. This was reproduced with fixtures only. [Kernel Xe engine configuration](https://docs.kernel.org/gpu/xe/xe_configfs.html)
+
+### 22 (P3) — the live Vulkan test can exercise a different Intel GPU
+
+In `tools/test-intel-gpu.py:551–560,583`, the encode/decode commands use the discovered PCI render node. The Vulkan command instead selects the first device whose name contains “Intel”. The selected Mesa ICD can expose both integrated and discrete Intel GPUs. This can fail an idle iGPU test or pass on unrelated iGPU activity, because any positive sample satisfies the workload assertion. Confirmed by command inspection and FFmpeg's documented selection rule. This host has one Intel GPU, so the dual-Intel failure was not reproduced physically. A one-frame control using a VA-API context opened on the selected render node and a derived Vulkan context (`vulkan=gpu@bound`) succeeded here and FFmpeg reported Intel Graphics (ARL). [FFmpeg hardware device selection](https://ffmpeg.org/ffmpeg.html)
+
+### Verification
+
+- Development build and style check passed. The existing Intel suite passed 206 assertions including all three mutation controls. Live peaks on the 270K Plus were 100% graphics, 33.0% encode and 18.4% decode. The AMD suite passed 198 assertions.
+- The independent Xe probes for 20 and 21 ran under ASan/UBSan and exited cleanly. Only the i915 hardware path received live validation.
+- Independently expanded the integrated-family macros with the C preprocessor. The sampler matches all 92 distinct IDs in this machine's Linux 7.3.4 headers and covers all 76 listed for those families in its 6.18.60 headers.
+- Checked all 16 ordered patch checksums and reapplied the recipe's patches with zero fuzz to a fresh archive of upstream htop 3.5.3. The resulting IntelGPU.c matched the audited file byte for byte. This verifies the patch series. The binary package was not rebuilt or installed.
+
+## 2026-11-19, Codex — Intel integrated graphics compatibility
+
+Reviewed the local changes over htop `943464c0` and outer `e593453`. The baseline accepted only i915 device 8086:7d67 and required both render and compute counters for graphics usage. The revised sampler recognizes 92 integrated graphics PCI IDs from the Linux 7.3 family lists. It discovers the bound driver, keeps clients scoped to the selected device, and uses an engine inventory to identify render-only graphics. Xe utilization uses busy and total GPU cycle deltas, and its memory readout combines the system and GTT allocation categories.
+
+- The development build completed without warnings. Style checks passed. The final Intel suite passed 206 assertions, including three mutation controls, and the AMD sampler passed 198. No outstanding finding from these checks.
+- Tests cover representative family IDs, discrete and pre-Alder Lake exclusions, deterministic mixed-driver selection, a render-only Alder Lake layout, Xe descriptor sharing, missing and stalled cycle denominators, timer reset, two video engines, sleep/wake, memory accounting and render/media GT selection. During development four fixture assertions caught a missing topology call in an intermediate build. All four pass in the tested source.
+- On the 270K Plus with i915, graphics utilization peaked at 100%, encode at 32.5% and decode at 18.4%. A whole-program ASan/UBSan terminal capture using a disposable layout showed the sleeping state and, in a separate live run, 2000 MHz, 93.7M allocated and 16% video activity. No sanitizer diagnostic was logged.
+- All 16 package patches matched their ordered checksums and applied to pristine htop 3.5.3 with zero fuzz. The resulting Intel sampler matched the tested development source byte for byte. The package recipe is 3.5.3-17. The system still runs 3.5.3-16.
+- Other Intel hardware and the xe driver were exercised with synthetic sysfs and fdinfo only. Real Xe power behavior, cross-generation performance and a binary package build were outside this validation.
 
 ## Scope and baseline
 

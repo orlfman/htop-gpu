@@ -1,7 +1,7 @@
 From 943464c03fa21d89440cac37cbc4b4a90c01150a Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 11 Nov 2026 18:24:44 -0700
-Subject: [PATCH 15/15] linux: read an AMD card only when it is known to be
+Subject: [PATCH 15/16] linux: read an AMD card only when it is known to be
  awake
 
 Only a runtime_status of exactly "suspended" stopped the sampler from

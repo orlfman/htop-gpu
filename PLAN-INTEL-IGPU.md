@@ -12,6 +12,10 @@ This supplements PLAN.md and follows AGENTS.md.
 The user wants Intel iGPU stats below the RX 9070 XT stats in the existing third column.
 The user selected Mission Center's utilization, clock speed, memory usage, and video encode/decode as the initial baseline, and requested a plan update before implementation.
 
+## Compatibility update (2026-11-19)
+
+The local source and 3.5.3-17 package recipe extend the original single-device baseline to the Tiger Lake, Rocket Lake, Alder Lake and later integrated families listed in the README. The sampler uses the bound driver and PCI identity. On i915 it reads engine time and allocated system0 bytes. On xe it compares busy and total GPU cycle deltas and sums the separate system and GTT allocation totals. It finds the graphics GT by render or compute engine class. A GPU exposing only one of those classes can supply utilization from that class. The release records below describe the original i915 implementation. See AUDIT.md for verification and hardware coverage.
+
 ## Recommended approach
 
 Add an independent Intel sampler and meters, starting with the currently bound i915 driver.

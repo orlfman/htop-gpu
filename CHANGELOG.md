@@ -4,6 +4,58 @@ Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
 
+## 2026-11-19, Claude Code (Claude Opus 5.5) — commit the 3.5.3-17 Intel series
+
+Committed at the user's request, not pushed. `src/htop` `amdgpu-meters`: `c3a0d73c` "linux: extend Intel integrated graphics support" (Codex's implementation with fixes for findings 20-24, the same `IntelGPU.c` as verified). `tools/export-patches.sh` regenerated all 16 patches: 0001-0015 changed only in their `[PATCH nn/16]` numbering, 0016 is now a real format-patch, and the PKGBUILD checksums were updated. Applying the series to a fresh `git archive 3.5.3` reproduces the whole `amdgpu-meters` tree with no rejects, and all 16 checksums match. Updated AGENTS.md, PLAN.md and the AUDIT.md status lines from uncommitted to `c3a0d73c`. No package was built or installed (installed: 3.5.3-16).
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — verify the finding 24 fix
+
+Audit only, no code changes. No new findings, and finding 24 is confirmed fixed: my live `O_PATH` probe now gives real readings with and without `O_CLOEXEC`, while partial or malformed records stay unknown. Build, style, Intel (250) and AMD (198) suites and the 16-patch reproduction passed. Results are in AUDIT.md. Everything is still uncommitted. Installed: 3.5.3-16.
+
+## 2026-11-19, Codex — fix Intel finding 24
+
+Opening the Intel render node with O_PATH no longer hides GPU and video utilization. Added regression coverage for idle and busy clients, malformed flags and partial DRM metadata. Refreshed patch 0016 and its checksum. The live comparison, 250 Intel checks, 198 AMD checks, build, style, sanitizers and package patch reproduction passed. The fix is in the uncommitted 3.5.3-17 tree.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — audit of the finding 23 fix
+
+Audit only, no code changes. The finding 23 fix is correct, but it opens P3 finding 24: an `O_PATH` handle on the iGPU node now looks like an unreadable client, so usage and video stay N/A while it is open. Reproduced live and recorded in AUDIT.md with a suggested fix. Build, style, Intel (244) and AMD (198) suites and the 16-patch reproduction all passed. Everything is still uncommitted. Installed: 3.5.3-16.
+
+## 2026-11-19, Codex — fix Intel finding 23
+
+Matched GPU descriptors with missing identity now signal incomplete client statistics. Added stateful tests for generic fdinfo, missing and malformed fields, recovery, actual closure and foreign identities. Updated patch 0016 and its checksum. All 244 Intel and 198 AMD assertions passed, along with build, style, sanitizer and package checks. AUDIT.md records the original probe results. These changes remain uncommitted in the 3.5.3-17 working tree.
+
+## 2026-11-19, Codex — audit Tiger Lake and Rocket Lake support
+
+Recorded open finding 23 in AUDIT.md. The sampler reports false zeros when a matched Intel GPU descriptor exposes only generic fdinfo. Reproduced on both family fixtures. All 34 new device/driver cases with valid telemetry and 40 exclusion checks passed against the package-reproduced sampler. The regular Intel and AMD suites and style check passed. Audit and handoff records are uncommitted alongside the existing implementation. Installed version remains 3.5.3-16.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — re-audit of the Tiger Lake and Rocket Lake extension
+
+Audit only, no code changes. No findings: the 109-ID table matches the 7.3.4 kernel headers with DG1 and Ice Lake excluded, the build has no warnings, style is OK, Intel (232) and AMD (198) suites pass, and the 16-patch series reproduces the tested `IntelGPU.c` byte for byte with matching checksums. Results are in AUDIT.md. Everything is still uncommitted. Installed: 3.5.3-16.
+
+## 2026-11-19, Codex — extend Intel meters to Tiger Lake and Rocket Lake
+
+Added all 17 integrated GPU IDs for these families and expanded render-only i915 meter tests, xe discovery checks and discrete-GPU exclusions. Refreshed the 3.5.3-17 package patch, its filename and checksum, and the compatibility documentation. Build, style, Intel and AMD suites, sanitized display and package reproduction passed. See AUDIT.md for results and hardware limits. Source, tests, docs and packaging remain uncommitted. The installed version is 3.5.3-16.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — fix two stale docs
+
+Docs only. AGENTS.md "What this is" now describes the uncommitted 3.5.3-17 Intel coverage (Alder Lake and later, `i915` and `xe`, hardware-tested only on this machine) and notes that patch 0016 is a plain diff until it is re-exported. The AUDIT.md status header now covers findings 15-22 and names both auditors. No code or packaging changes; everything is still uncommitted. Installed: 3.5.3-16.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — audit of Codex's Intel compatibility work
+
+Audit only, no code changes. No findings: the PCI ID table matches the 7.3.4 kernel headers exactly, the build has no warnings, style is OK, Intel (216) and AMD (198) suites pass, and the 16-patch series reproduces the tested `IntelGPU.c` byte for byte with matching checksums. Housekeeping notes are in AUDIT.md: commit the source and re-export 0016, then refresh AGENTS.md and the AUDIT.md header, and check Xe runtime PM on real hardware. Everything is still uncommitted. Installed: 3.5.3-16.
+
+## 2026-11-19, Codex — fix Intel audit findings 20–22
+
+Retained Xe counter baselines across timestamp stalls, exposed utilization and clock on compute-only GTs, and pinned the live Vulkan workload to the sampled PCI device with a per-process activity check. Updated patch 0016 and its checksum. All 216 Intel and 198 AMD checks, style, build, sanitizer and patch verification passed. See AUDIT.md for the original probe results and hardware limits. Changes are local and uncommitted.
+
+## 2026-11-19, Codex — audit of Intel compatibility changes
+
+Recorded three open findings in AUDIT.md. Xe drops work across a stalled timestamp and hides compute-only usage and clock. The live Vulkan check can select the wrong Intel GPU. Existing tests, style, device ID checks and patch verification passed. The audit and handoff records are uncommitted alongside the previous implementation.
+
+## 2026-11-19, Codex — Intel iGPU support from Alder Lake onward
+
+Extended discovery and telemetry to the i915 and xe drivers. Added platform, mixed-device, render-only and Xe accounting tests. Updated the compatibility documentation and prepared patch 0016 and the 3.5.3-17 recipe. The development build, style, Intel and AMD suites, sanitized terminal display and patch reproduction passed. Only the 270K Plus was tested on hardware. See AUDIT.md for results. Source, tests, patch, recipe and documentation are uncommitted. The installed version is 3.5.3-16. Export patch 0016 from its source commit when committing the series.
+
 ## 2026-11-11, Claude Code (Claude Fable 5.2): push
 
 - Pushed at the user's request: `src/htop` `amdgpu-meters` `798d8cfa..943464c0`

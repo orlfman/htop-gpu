@@ -7,7 +7,7 @@
 
 pkgname=htop-gpu
 pkgver=3.5.3
-pkgrel=16
+pkgrel=17
 pkgdesc='Interactive process viewer with AMD Radeon RX 6000/7000/9000 and Intel iGPU meters, alongside stock htop'
 arch=('x86_64')
 url='https://github.com/orlfman/htop'
@@ -37,25 +37,27 @@ _patches=(
   0013-linux-support-RDNA-2-and-newer-AMD-dedicated-cards.patch
   0014-linux-retry-AMD-GPU-values-after-access-errors.patch
   0015-linux-read-an-AMD-card-only-when-it-is-known-to-be-a.patch
+  0016-linux-extend-Intel-integrated-graphics-support.patch
 )
 source=("git+https://github.com/htop-dev/htop.git#tag=${pkgver}"
         "${_patches[@]}")
 sha256sums=('a4619a140f8374c526d27cf5f892b2dceaee27b33a0446d902c35962a5159850'
-            '667d211ff9d7a8d6701871cf10fcf052403d621372900d0e6b816079305239c1'
-            'a8dae152435dc07a8315a8694dc5312fa146fc7c9ca25f7896c70d3e749249ea'
-            '50a26795ff760bdbefccc361a8c44627ba8a02d7cd5a5a97ab915a208108ba6e'
-            '67c2ed50eca87d0b2fd169c1de5817235ff42a311fde229779abd18ab97b6966'
-            '16c782ef7f8268c5f5c9b746cea4d2413506136f90ce62c8a5dd9a011d1649aa'
-            'd8c6e0711ab13886577d9554c0822fdf794943e5ff1a6e8dfabe1b54f22f9a5a'
-            'c8b45139cec119e39fcaa89264626fd78e62aa53ab39f128fc4218cfeaa8ecf6'
-            '7710ede1dff4a3f63cfcef61cfee69b6d9cf1d6729ab0aa83f22eadfad124489'
-            '981e67d235043a2e93059f6f45b9092e505f94567e1dd260fdd919c727db2798'
-            'bd5568cb28f1dee0bd50bd8bc64d6b875c021f13d6705970fe9c79a0d2593070'
-            'b30b34cfad040e68a84f34d4730c83236626b89e9673f15fd366d344e6839121'
-            '88dba641392c33d03b6fdd89eb985a7c137909a4579ec2e7c2c353c72feffc71'
-            '96c5ea6ed3013c9f9e1216b118fe1a1741b76800bfcb1ba3a92c57c1f9bf98cc'
-            'b94e000a85dd3dc954c556166fce83257e046c05c94b3b2034cc580d6f4cf1c2'
-            'bc931b4817d6b9fd9a9d32b85e2978bcfe5e4a3441ea93fe31106afaf94efbc8')
+            'fc4c7880eca4cd60ae0d59e81c6a7246c98e2d838bf755dfd5bff4c89d5f7580'
+            '7f5af77c391db8e4220b85b019e0bc23656de890da03938449c096eddea27ac3'
+            '122570af71749970178f99e6b1c44e30e961ffbb01e08ba9a9de34fdb4e54b8b'
+            '9bbc38bf0b2b77a77bdfcf428e51f3e35ac671545a13d614f1e02eb2caf055c8'
+            'e666b040190166f5420037c05781e0de7c2efc96fb2b1135b37c8ae316987098'
+            '44eeb9e5dfe70a228b8dcf332c971fcc880b1ee79d14e1391497c3f3b20f3004'
+            '2a21701db7df6f33d123aebe867f6431641a2195ff9aaf99c6c5128219cdfcfb'
+            'ffd2d09e0cfc23252eba01c67060e8426df3c2d758fc007b14d5c2974a31a8ae'
+            '411958145a0dfbc3c51fe5eda160e09c62d5ca6e012cc2a0ac2d9f314358c766'
+            '0c67c8c1df8cac1a350959ee0fc57defecde53b38e605bdad01b0a52331f5026'
+            '2ffedbb1ffe3453ce07abe1ec0272333bf4b747c0dfa602fbd4d16b71b96d9af'
+            'c9dc81312ce4e980b1b129fc5f03bc03796b155b454f6e6ca6f089a7fdb40f2a'
+            '7a68dec4b24df230adf19cfc57772432560b677ed8b578efb6447d1008db7e41'
+            '97d2cabc22b688b258ff720799f4142bdb1aeea2296736afa4ef1d88584740af'
+            '54ba70dccf6a04f5e94a42aa183266efaad649b033a0ace96e5a89900b706c3a'
+            '7563d4e9577f34f4a8a67d07c66e7fb3ca5fab5cc34b90e4827b6450d8a84103')
 
 prepare() {
   cd htop

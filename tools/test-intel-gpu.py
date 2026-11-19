@@ -88,21 +88,21 @@ class Tree:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(value) + "\n")
 
-    def bind(self):
-        link = self.sys / "bus/pci/drivers/i915" / PCI
+    def bind(self, driver="i915"):
+        link = self.sys / "bus/pci/drivers" / driver / PCI
         link.parent.mkdir(parents=True, exist_ok=True)
         link.symlink_to(self.dev)
 
-    def device(self):
+    def device(self, product="0x7d67", driver="i915"):
         self.write(self.dev / "vendor", "0x8086")
-        self.write(self.dev / "device", "0x7d67")
+        self.write(self.dev / "device", product)
         self.write(self.dev / "power/runtime_status", "active")
         for node in (self.card, "renderD333"):
             self.write(self.dev / "drm" / node / "dev", "1:3")
         self.write(self.gt / "rps_cur_freq_mhz", 550)
         self.write(self.gt / "rps_act_freq_mhz", 750)
         self.write(self.gt / "rps_max_freq_mhz", 2000)
-        self.bind()
+        self.bind(driver)
 
     def process(self, pid=100, starttime=1000):
         # starttime is field 22; comm deliberately contains spaces and parentheses.
@@ -165,6 +165,168 @@ def scenario(binary, tree, name, steps):
 
 
 def fake_tests(binary, t):
+    # A representative of every supported platform group, plus lookalike dGPUs.
+    for product, driver, supported in (
+            ("0x9a60", "i915", True), ("0x9a49", "xe", True), ("0x4c8a", "xe", True),
+            ("0x4680", "i915", True), ("0x46a6", "i915", True), ("0x46d1", "i915", True),
+            ("0xa780", "i915", True), ("0xa7a0", "i915", True), ("0xa721", "i915", True),
+            ("0x7d55", "i915", True), ("0x7d67", "i915", True), ("0x6420", "xe", True),
+            ("0xb080", "xe", True), ("0xfd80", "xe", True), ("0xd740", "xe", True), ("0xd750", "xe", True),
+            ("0x56a0", "i915", False), ("0xe20b", "xe", False), ("0x4905", "i915", False), ("0x8a52", "i915", False)):
+        scenario(binary, t, f"PCI {product} on {driver}", [
+            (100, lambda t: t.device(product, driver), {"status": "active" if supported else "not_found"},
+             f"{product} {'recognized' if supported else 'excluded'}"),
+        ])
+
+    def generic_fdinfo(t):
+        t.write(t.proc / "100/fdinfo/3", "pos:\t0\nflags:\t0100002\nmnt_id:\t21\nino:\t123")
+
+    def open_generic(t):
+        t.start()
+        generic_fdinfo(t)
+
+    unknown = {"incomplete": True, "usage": None, "video": None, "memory": None, "clock": 550}
+    idle = {"incomplete": False, "clients": 0, "usage": 0.0, "video": 0.0, "memory": 0}
+    scenario(binary, t, "matched DRM descriptor with incomplete or foreign identity", [
+        (100, open_generic, unknown, "generic-only fdinfo at first sample"),
+        (1100, None, unknown, "persistent generic-only fdinfo stays unavailable"),
+        (2100, lambda t: t.client(omit=("drm-driver",)), unknown, "missing driver"),
+        (3100, lambda t: t.client(omit=("drm-pdev",)), unknown, "missing PCI address"),
+        (4100, lambda t: t.client(pci="invalid"), unknown, "malformed PCI address"),
+        (5100, lambda t: t.client(), {"incomplete": False, "usage": None, "memory": 1048576}, "identity restored"),
+        (6100, lambda t: t.client(render=300000000), {"usage": 30.0}, "fresh activity interval"),
+        (7100, generic_fdinfo, unknown, "known descriptor loses its identity"),
+        (8100, lambda t: ((t.proc / "100/fd/3").unlink(), (t.proc / "100/fdinfo/3").unlink()),
+         idle, "closed last descriptor permits zero"),
+        (9100, lambda t: t.client(driver="amdgpu", omit=("drm-pdev",)), idle, "explicit foreign driver"),
+        (10100, lambda t: t.client(pci="0000:04:00.0", omit=("drm-driver",)), idle, "explicit foreign PCI address"),
+    ])
+
+    # The fake render node uses /dev/null's device number. Capture actual
+    # kernel fdinfo for a path-only reference to that same character device.
+    path_fd = os.open("/dev/null", os.O_PATH | os.O_CLOEXEC)
+    try:
+        path_info = Path(f"/proc/self/fdinfo/{path_fd}").read_text()
+    finally:
+        os.close(path_fd)
+
+    def with_path_handle(t):
+        t.start()
+        t.client(fd=4)
+        t.write(t.proc / "100/fdinfo/4", path_info)
+
+    scenario(binary, t, "path-only handle beside a real DRM client", [
+        (100, with_path_handle, {"incomplete": False, "clients": 1, "memory": 1048576}, "only the DRM client counts"),
+        (1100, lambda t: t.client(render=200000000, video=100000000),
+         {"incomplete": False, "usage": 20.0, "video": 10.0}, "path handle preserves active readings"),
+        (2100, lambda t: ((t.proc / "100/fd/3").unlink(), (t.proc / "100/fdinfo/3").unlink()),
+         idle, "path handle alone permits idle"),
+        (3100, lambda t: t.write(t.proc / "100/fdinfo/4", f"flags:\t{os.O_PATH:o}junk"),
+         unknown, "malformed path flags cannot hide an unknown client"),
+        (4100, lambda t: t.write(t.proc / "100/fdinfo/4", path_info + "drm-client-id:\t1"),
+         unknown, "partial DRM metadata still marks coverage incomplete"),
+    ])
+
+    def add_other_card(t):
+        other = t.sys / "bus/pci/devices/0000:01:00.0"
+        shutil.copytree(t.dev, other)
+        t.write(other / "device", "0x64a0")
+        link = t.sys / "bus/pci/drivers/xe" / other.name
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(other)
+
+    scenario(binary, t, "deterministic selection with i915 and xe devices", [
+        (100, lambda t: (t.start(), add_other_card(t)), {"pci": PCI, "clients": 1}, "select lower PCI address"),
+        (1100, lambda t: t.write(t.dev / "device", "0x56a0"),
+         {"pci": "0000:01:00.0", "clients": 0, "usage": None}, "skip discrete Arc and clear old clients"),
+        (2100, lambda t: t.write(t.dev / "device", "0xa780"),
+         {"pci": PCI, "clients": 1, "usage": None}, "return to lower-address supported iGPU"),
+    ])
+
+    def render_only(t, product, legacy_clock):
+        t.device(product)
+        card = t.gt.parents[1]
+        (card / "engine/rcs0").mkdir(parents=True)
+        if legacy_clock:
+            shutil.rmtree(t.gt.parent)
+            t.write(card / "gt_cur_freq_mhz", 400)
+            t.write(card / "gt_max_freq_mhz", 1400)
+        t.client(omit=("drm-engine-compute",))
+
+    for family, product, legacy_clock in (("Tiger Lake", "0x9a49", True), ("Rocket Lake", "0x4c8a", False),
+                                          ("Alder Lake", "0x4680", True)):
+        scenario(binary, t, f"{family} render-only i915", [
+            (100, lambda t: render_only(t, product, legacy_clock),
+             {"usage": None, "clock": 400 if legacy_clock else 550, "clockMax": 1400 if legacy_clock else 2000},
+             f"{family} baselines with requested clock"),
+            (1100, lambda t: t.client(render=350000000, video=150000000, memory="2 MiB", omit=("drm-engine-compute",)),
+             {"usage": 35.0, "compute": None, "video": 15.0, "memory": 2097152},
+             f"{family} render, video and system allocation"),
+            (2100, lambda t: (t.gt.parents[1] / "engine/ccs0").mkdir(),
+             {"usage": None}, "missing counter on an exposed compute engine stays unavailable"),
+        ])
+
+    def xe_client(t, busy, total, *, video=0, compute=0, gtt="512 KiB", video_total=True, fd=3):
+        t.client(driver="xe", fd=fd)
+        fields = {"drm-driver": "xe", "drm-pdev": PCI, "drm-client-id": 1,
+                  "drm-total-system": "256 KiB", "drm-total-gtt": gtt, "drm-shared-gtt": "128 KiB",
+                  "drm-total-vram0": "99 MiB", "drm-cycles-rcs": busy, "drm-total-cycles-rcs": total,
+                  "drm-cycles-ccs": compute, "drm-total-cycles-ccs": total,
+                  "drm-cycles-vcs": video, "drm-engine-capacity-vcs": 2}
+        if busy is None:
+            del fields["drm-cycles-rcs"], fields["drm-total-cycles-rcs"]
+        if video_total:
+            fields["drm-total-cycles-vcs"] = total
+        t.write(t.proc / "100/fdinfo" / str(fd), "\n".join(f"{k}: {v}" for k, v in fields.items()))
+
+    def xe(t):
+        t.device("0x64a0", "xe")
+        for idx, engines, freq in ((0, ("vcs",), 1300), (1, ("rcs", "ccs"), 800)):
+            gt = t.dev / "tile0" / f"gt{idx}"
+            for engine in engines:
+                (gt / "engines" / engine).mkdir(parents=True)
+            t.write(gt / "freq0/cur_freq", freq)
+            t.write(gt / "freq0/max_freq", 1800)
+        xe_client(t, 100, 1000)
+        t.client(pid=300, cid=2, driver="i915", memory="200 MiB")
+
+    scenario(binary, t, "Xe cycle ratios, allocated memory and render GT selection", [
+        (100, xe, {"usage": None, "clock": 800, "clockMax": 1800, "clients": 1, "memory": 786432},
+         "select render GT, count system and GTT once, ignore a foreign driver"),
+        (1100, lambda t: (xe_client(t, 310, 2000, video=1400, compute=150),
+                          xe_client(t, 310, 2000, video=1400, compute=150, fd=4)),
+         {"usage": 36.0, "video": 100.0, "videoRaw": 140.0, "videoCapacity": 2, "memory": 786432},
+         "GPU timestamps, capacity and descriptor aliases"),
+        (2100, lambda t: ((t.proc / "100/fd/4").unlink(), xe_client(t, 310, 2000, gtt="bad", video_total=False)),
+         {"usage": None, "video": None, "memory": None}, "stalled and missing denominators, malformed memory"),
+        (3100, lambda t: xe_client(t, 30, 100, video=10), {"usage": None, "video": None}, "GPU timer reset rebaselines"),
+        (4100, lambda t: xe_client(t, 60, 200, video=30), {"usage": 30.0, "video": 20.0}, "recovery after reset"),
+        (5100, lambda t: t.write(t.dev / "power/runtime_status", "suspended"),
+         {"status": "suspended", "clock": None, "usage": None}, "Xe sleep discards history"),
+        (6100, lambda t: t.write(t.dev / "power/runtime_status", "active"),
+         {"usage": None, "clock": 800}, "Xe wake starts a new interval"),
+    ])
+
+    scenario(binary, t, "Xe timestamp stall retains paired busy baseline", [
+        (100, xe, {"usage": None}, "baseline"),
+        (1100, lambda t: xe_client(t, 150, 1000), {"usage": None}, "busy advances during stall"),
+        (2100, lambda t: xe_client(t, 150, 1100), {"usage": 50.0}, "catch-up counts busy work during stall"),
+        (3100, lambda t: xe_client(t, 170, 1200), {"usage": 20.0}, "next interval counts only new work"),
+    ])
+
+    def compute_only(t):
+        xe(t)
+        (t.dev / "tile0/gt1/engines/rcs").rmdir()
+        xe_client(t, None, 1000, compute=100)
+
+    scenario(binary, t, "Xe compute-only GT with separate media GT", [
+        (100, compute_only, {"usage": None, "clock": 800, "clockMax": 1800}, "select compute GT for clock"),
+        (1100, lambda t: xe_client(t, None, 2000, compute=600),
+         {"usage": 50.0, "compute": 50.0, "render": None}, "compute supplies graphics utilization"),
+        (2100, lambda t: ((t.dev / "tile0/gt1/engines/rcs").mkdir(), xe_client(t, None, 3000, compute=600)),
+         {"usage": None, "compute": 0.0}, "exposed render engine with missing counter stays unavailable"),
+    ])
+
     scenario(binary, t, "deltas, allocated memory, requested clock, cache, overlap and two video engines", [
         (100, lambda t: t.start(memory="1 MiB"), {"status": "active", "usage": None, "video": None,
           "memory": 1048576, "clock": 550, "clockMax": 2000, "clients": 1}, "baseline; allocated, not resident; requested, not actual"),
@@ -435,9 +597,9 @@ def fake_tests(binary, t):
 def negative_controls(work, tree):
     original = (SRC / "linux/IntelGPU.c").read_text()
     mutations = {
-        "PCI filter": ('!String_eq(driver, "i915") || !String_eq(pci, device.pci)', '!String_eq(driver, "i915")'),
+        "PCI filter": ('if (pciValid && !String_eq(pci, device.pci))', 'if (false)'),
         "fork deduplication": ('IntelGPU_observe(&observation);',
-                               'IntelGPU_observe(&(IntelGPUObservation) { .id = observation.id ^ (strtoull(process->d_name, NULL, 10) << 32), .mask = observation.mask, .memory = observation.memory, .memoryValid = observation.memoryValid, .capacityValid = observation.capacityValid, .capacityExplicit = observation.capacityExplicit, .capacity = {observation.capacity[0], observation.capacity[1], observation.capacity[2]}, .value = {observation.value[0], observation.value[1], observation.value[2]} });'),
+                               'observation.id ^= strtoull(process->d_name, NULL, 10) << 32; IntelGPU_observe(&observation);'),
         "dual-video capacity": ('elapsed * current->capacity[e] * INTELGPU_ACCOUNTING_SLACK', 'elapsed * INTELGPU_ACCOUNTING_SLACK'),
     }
     for name, (old, new) in mutations.items():
@@ -456,13 +618,32 @@ def negative_controls(work, tree):
         check(f"negative control catches broken {name}", caught)
 
 
+def graphics_work_on_device(pid, pci):
+    """Check the fresh FFmpeg process's own render/compute counters."""
+    for entry in (Path("/proc") / str(pid) / "fdinfo").glob("*"):
+        try:
+            fields = dict(line.split(":", 1) for line in entry.read_text().splitlines() if ":" in line)
+        except FileNotFoundError:
+            continue
+        if fields.get("drm-pdev", "").strip() != pci:
+            continue
+        for key in ("drm-engine-render", "drm-engine-compute", "drm-cycles-rcs", "drm-cycles-ccs"):
+            value = fields.get(key, "").split()
+            if value and value[0].isdigit() and int(value[0]) > 0:
+                return True
+    return False
+
+
 def live_tests(binary, work):
-    print("[live Intel i915: readable clients, clocks, encode, decode and graphics]", flush=True)
+    print("[live Intel iGPU: readable clients, clocks, encode, decode and graphics]", flush=True)
     s = Sampler(binary)
     ms = lambda: time.monotonic_ns() // 1000000
     first = s.sample(ms())
-    check("supported Intel iGPU found", first["pci"] == PCI, json.dumps(first))
-    node = f"/dev/dri/by-path/pci-{PCI}-render"
+    check("supported Intel iGPU found", bool(first["pci"]), json.dumps(first))
+    if not first["pci"]:
+        s.close()
+        return
+    node = f"/dev/dri/by-path/pci-{first['pci']}-render"
     encoded = work / "intel-test.mp4"
     encode = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-vaapi_device", node,
               "-re", "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=60", "-t", "5",
@@ -470,10 +651,14 @@ def live_tests(binary, work):
     decode = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-vaapi_device", node,
               "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi", "-re",
               "-i", str(encoded), "-t", "5", "-f", "null", "-"]
-    graphics = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-init_hw_device", "vulkan=igpu:Intel",
+    graphics = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-init_hw_device", f"vaapi=bound:{node}",
+                "-init_hw_device", "vulkan=igpu@bound",
                 "-filter_hw_device", "igpu", "-re", "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=60",
                 "-t", "5", "-vf", "format=rgba,hwupload,avgblur_vulkan=sizeX=8:sizeY=8", "-f", "null", "-"]
     env = dict(os.environ)
+    # Mesa exposes only this PCI device to the Vulkan workload.
+    pci_tag = first["pci"].replace(":", "_").replace(".", "_")
+    env["DRI_PRIME"] = f"pci-{pci_tag}!"
     drivers = [p for p in Path("/usr/share/vulkan/icd.d").glob("*intel*.json") if "libvulkan_intel.so" in p.read_text()]
     if drivers:
         env["VK_DRIVER_FILES"] = str(sorted(drivers)[0])
@@ -481,10 +666,13 @@ def live_tests(binary, work):
     for name, command in (("encode", encode), ("decode", decode), ("graphics", graphics)):
         p = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=env)
         snapshots = []
+        graphics_on_target = False
         try:
             while p.poll() is None:
                 time.sleep(.35)
                 snapshots.append(s.sample(ms()))
+                if name == "graphics" and not graphics_on_target:
+                    graphics_on_target = graphics_work_on_device(p.pid, first["pci"])
             err = p.communicate(timeout=10)[1]
         finally:
             if p.poll() is None:
@@ -492,6 +680,8 @@ def live_tests(binary, work):
                 p.communicate()
         check(f"Intel {name} workload succeeds", p.returncode == 0 and not err.strip(), err[:600])
         key = "usage" if name == "graphics" else "video"
+        if name == "graphics":
+            check("FFmpeg recorded graphics work on the selected PCI device", graphics_on_target)
         usable = [x for x in snapshots if x[key] is not None]
         peak = max((x[key] for x in usable), default=0)
         check(f"{key} responds to {name} (peak {peak:.1f}%)", peak > 0, json.dumps(snapshots[-2:]))

@@ -1,7 +1,7 @@
 From 7c2fe84b07755eb1743ce6d5ef5517a96ad8bdda Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 11 Nov 2026 17:59:45 -0700
-Subject: [PATCH 14/15] linux: retry AMD GPU values after access errors
+Subject: [PATCH 14/16] linux: retry AMD GPU values after access errors
 
 Two cases where a value read once was given up on although its read
 had only failed:

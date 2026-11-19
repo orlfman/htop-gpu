@@ -43,7 +43,7 @@ For the Intel iGPU:
 
 - Usage, clock, memory and video encode/decode
 
-These only count programs that htop can see, which in practice means your own. That's usually everything that matters on a desktop, but it's worth knowing.
+Usage, video and allocated memory cover programs whose GPU counters htop can read. The requested clock comes from the GPU driver. A missing counter shows N/A.
 
 For the CPU:
 
@@ -55,7 +55,9 @@ All of them work like normal htop meters. You add them in F2 Setup and can show 
 
 ## Will it work on my computer?
 
-Partly. The AMD meters should work on any dedicated RX 6000, RX 7000 or RX 9000 card (RDNA 2, 3 and 4, and their Radeon Pro versions), and the heading shows that card's name. I only own an RX 9070 XT though, so the other cards are tested against made up copies of what the kernel driver reports, not on real hardware. If you try it on one, I'd like to hear how it goes. Integrated Radeon graphics and older cards show N/A. The iGPU meters look for the Arrow Lake iGPU (PCI ID 8086:7d67) specifically.
+Partly. The AMD meters should work on any dedicated RX 6000, RX 7000 or RX 9000 card (RDNA 2, 3 and 4, and their Radeon Pro versions), and the heading shows that card's name. I only own an RX 9070 XT though, so the other cards are tested against made up copies of what the kernel driver reports, not on real hardware. If you try it on one, I'd like to hear how it goes. Integrated Radeon graphics and older cards show N/A.
+
+The Intel meters recognize Tiger Lake and Rocket Lake integrated graphics (11th-gen Core), Alder Lake (12th-gen Core), Raptor Lake and its refresh, plus the Meteor, Arrow, Lunar, Panther, Wildcat and Nova Lake families listed in the Linux 7.3 PCI IDs. They support both `i915` and `xe`. The sampler picks the supported iGPU with the lowest PCI address and reads the metrics its driver exposes. Intel Arc desktop and laptop discrete GPUs are excluded. Live testing used a Core Ultra 7 270K Plus on `i915`; the other families and `xe` have simulated test coverage.
 
 The CPU power meter needs to read the RAPL energy counter, which Linux keeps root only by default. I made mine readable with this udev rule in `/etc/udev/rules.d/99-rapl-read.rules`:
 

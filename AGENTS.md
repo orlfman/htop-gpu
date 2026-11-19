@@ -26,6 +26,14 @@ Finding 8 is fixed: known Intel PID/starttime/FD ownership survives access gaps,
 so lost access does not become a false zero. Tests cover aliases, exit, and reuse.
 The Intel source is committed as `bb4f7331` (reviewed 2026-10-29); patch 0010 is
 exported from it like the others.
+Committed as htop `c3a0d73c` and packaged as 3.5.3-17 (patch 0016; not yet
+installed, 2026-11-19): the Intel meters cover Tiger Lake, Rocket Lake, Alder
+Lake and newer integrated families (109 PCI IDs from the Linux 7.3 lists) on
+both `i915` and `xe`, selecting the supported iGPU with the lowest PCI address.
+Discrete Intel graphics, including DG1 and Arc, and earlier integrated families
+are excluded. Only this machine's `8086:7d67` on `i915` is tested on hardware;
+`xe` and the other families are covered by fake sysfs/fdinfo tests. See
+AUDIT.md (findings 20-24).
 
 ## Read first
 
