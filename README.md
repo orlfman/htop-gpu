@@ -4,33 +4,9 @@ This is my own build of [htop](https://htop.dev) with GPU stats and CPU power ad
 
 It started out built for my own machine (an AMD Radeon RX 9070 XT and the Intel iGPU in my Core Ultra 7 270K Plus), but it now works with recent AMD cards, Intel iGPUs, and the power readings of both Intel and AMD CPUs. It installs as `htop-gpu`, right next to the normal `htop`, so the regular one stays untouched and keeps getting updates.
 
-Here's what the extra GPU column looks like on my desktop:
+Here's what it looks like on my desktop. The two CPU columns on the left show the CPU's name on top and its power at the bottom, and the right column has the RX 9070 XT and the Intel iGPU, which was busy playing a video in mpv:
 
-```
-Radeon RX 9070 XT
-GPU[|||||                    7%]
-VRM[||||||||       1.93G/15.9G]
-Pwr[|||||||           33W/304W]
-VCN[||||||                 10%]
-Fan[                   stopped]
-GPU temp: edge:44°C junction:46°C mem:46°C
-GPU clock: 1529MHz
-VRAM clock: 456MHz 7.3Gbps busy:2%
-
-Intel iGPU
-iGP[                        0%]
-iGPU clock: 0MHz
-iGPU mem: 180M
-Vid[                    0% E/D]
-```
-
-And the CPU column gets a heading with the CPU's name on top and a power meter at the bottom:
-
-```
-Intel Core Ultra 7 270K Plus
-...
-Pwr[|||              10.8W/250W]
-```
+![htop-gpu with the CPU, Radeon RX 9070 XT and Intel iGPU meters](docs/htop-gpu-desktop.png)
 
 And here it is next to MangoHud while playing Dune: Awakening, which is how I checked that the numbers line up: [htop-gpu](docs/game-load-test/htop-gpu-dune-awakening.png) and [MangoHud](docs/game-load-test/mangohud-dune-awakening.webp).
 

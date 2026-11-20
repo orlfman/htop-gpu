@@ -3,6 +3,10 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-11-19, Claude Code (Claude Opus 5.5) — README screenshot
+
+Docs only, at the user's request. The user's Spectacle screenshot (`~/Pictures/Screenshots/Screenshot_20261119_203601.png`, 1328x806 PNG, 278 KB, htop-gpu 3.5.3-20 in Kwi) is copied unchanged to `docs/htop-gpu-desktop.png` and replaces the README's two text examples: the GPU column block and the CPU heading and power block. The screenshot shows the process list too, including the user name and mpv command lines; the user chose to publish it as is. Committed and pushed.
+
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — push and install 3.5.3-20
 
 At the user's request.
