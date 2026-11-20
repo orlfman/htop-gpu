@@ -2,7 +2,7 @@
 
 This is my own build of [htop](https://htop.dev) with GPU stats added to the header. Regular htop can show a combined GPU percentage, but it can't tell me anything about VRAM, temperatures, power or clocks, and it lumps my two GPUs together. So I added the meters I actually wanted.
 
-It's built for my machine: an AMD Radeon RX 9070 XT, the Intel iGPU in my Core Ultra 7 270K Plus, and that CPU's power readings. It installs as `htop-gpu`, right next to the normal `htop`, so the regular one stays untouched and keeps getting updates.
+It started out built for my own machine (an AMD Radeon RX 9070 XT and the Intel iGPU in my Core Ultra 7 270K Plus), but it now works with recent AMD cards and Intel iGPUs in general. It installs as `htop-gpu`, right next to the normal `htop`, so the regular one stays untouched and keeps getting updates.
 
 Here's what the extra column looks like on my desktop:
 
@@ -28,12 +28,12 @@ And here it is next to MangoHud while playing Dune: Awakening, which is how I ch
 
 ## What it shows
 
-For the RX 9070 XT:
+For AMD cards:
 
 - GPU usage
 - VRAM used out of the total
 - Power draw against the power limit
-- Video engine load (encoding and decoding share one engine on this card, so it's one number), with its clocks
+- Video engine load (encoding and decoding share one engine, so it's one number), with its clocks
 - Fan speed, which just says "stopped" when the card is idle and the fan is off
 - Edge, junction and memory temperatures, which turn yellow and then red as they get close to their limits
 - GPU clock
@@ -43,11 +43,11 @@ For the Intel iGPU:
 
 - Usage, clock, memory and video encode/decode
 
-Usage, video and allocated memory cover programs whose GPU counters htop can read. The requested clock comes from the GPU driver. A missing counter shows N/A.
+Usage, video and memory add up the programs htop can read, which in practice means your own. When it can't get a reading, the meter says N/A instead of guessing. The clock comes straight from the driver.
 
-For the CPU:
+For Intel CPUs:
 
-- Package power against the long term power limit (PL1), from Intel RAPL
+- Package power against the long term power limit (PL1), from RAPL
 
 There are also two headings you can put above a group of meters: one with the card's name, and one with the CPU's name ("Intel Core Ultra 7 270K Plus" here), like the "Intel iGPU" one.
 
@@ -57,11 +57,13 @@ All of them work like normal htop meters. You add them in F2 Setup and can show 
 
 Partly. The AMD meters should work on any dedicated RX 6000, RX 7000 or RX 9000 card (RDNA 2, 3 and 4, and their Radeon Pro versions), and the heading shows that card's name. I only own an RX 9070 XT though, so the other cards are tested against made up copies of what the kernel driver reports, not on real hardware. If you try it on one, I'd like to hear how it goes. Integrated Radeon graphics and older cards show N/A.
 
-The Intel meters recognize Tiger Lake and Rocket Lake integrated graphics (11th-gen Core), Alder Lake (12th-gen Core), Raptor Lake and its refresh, plus the Meteor, Arrow, Lunar, Panther, Wildcat and Nova Lake families listed in the Linux 7.3 PCI IDs. They support both `i915` and `xe`. The sampler picks the supported iGPU with the lowest PCI address and reads the metrics its driver exposes. Intel Arc desktop and laptop discrete GPUs are excluded. Live testing used a Core Ultra 7 270K Plus on both `i915` and `xe`. The other families have simulated test coverage.
+The Intel meters work with the integrated graphics in 11th gen Core and newer: Tiger Lake and Rocket Lake, Alder Lake, Raptor Lake and its refresh, Meteor Lake, Arrow Lake, Lunar Lake, Panther Lake, Wildcat Lake and Nova Lake. Both the `i915` kernel driver and the newer `xe` one are supported. Intel Arc and other discrete Intel GPUs aren't covered. I've tested my 270K Plus on both drivers, and the other chips only against made up copies of what the driver reports, same as the AMD cards.
 
-The Xe meters check for sleep on every refresh. When runtime power management is automatic, they reuse readings between hardware samples so the iGPU has time to suspend. A 1 s autosuspend delay gives a 1.3 s minimum between samples while continuously active. Setting the device's power policy to `on` keeps it awake and allows fresh readings every refresh.
+On `xe`, just reading the iGPU's counters keeps it awake. So if you set htop to refresh faster than about once a second, the iGPU meters only update every 1.3 seconds or so, which leaves the iGPU time to go to sleep when nothing is using it. At htop's default speed you won't notice. If you've set the iGPU to always stay on, they update every refresh.
 
-The `GPU%` and `GPU_TIME` process columns and the generic GPU meter use engine time in nanoseconds. Xe reports engine cycles, so the working-tree process reader skips Xe descriptors and continues accounting for other GPUs held by the same process. The Intel header meters use Xe's cycle counters.
+htop's own `GPU%` and `GPU_TIME` process columns can't use `xe`'s numbers (`xe` counts in a different unit), and reading them would keep the iGPU awake too. So those columns skip `xe` and still count any other GPU a program uses. The iGPU meters in the header read `xe` properly.
+
+To find out which programs are using the iGPU, htop-gpu looks at the files they have open. It's careful not to ask network shares or FUSE mounts about those files, so a hung NFS or SMB share shouldn't freeze it.
 
 The CPU power meter needs to read the RAPL energy counter, which Linux keeps root only by default. I made mine readable with this udev rule in `/etc/udev/rules.d/99-rapl-read.rules`:
 
@@ -89,7 +91,7 @@ To get rid of it, `sudo pacman -R htop-gpu`. Regular htop doesn't care either wa
 
 ## Where things are
 
-The actual code is the patches in [`packaging/`](packaging/), a handful of commits on top of htop 3.5.3. I keep the commits themselves in a separate htop clone and export them from there. I try to keep it close to upstream htop and follow their style, so moving to a new htop release is mostly a rebase.
+The actual code is the patches in [`packaging/`](packaging/), a stack of commits on top of htop 3.5.3. I keep the commits themselves in a separate htop clone and export them from there. I try to keep it close to upstream htop and follow their style, so moving to a new htop release is mostly a rebase.
 
 This repo has everything:
 

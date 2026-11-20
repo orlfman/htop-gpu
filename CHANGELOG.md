@@ -3,6 +3,17 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-11-19, Claude Code (Claude Opus 5.5) — refresh the README
+
+Docs only, at the user's request.
+
+- The intro no longer says the build is only for this machine.
+- "What it shows" covers AMD cards in general, and the CPU power meter is marked Intel only.
+- The Intel compatibility, xe refresh and GPU% paragraphs were rewritten in plain first-person wording, dropping "working-tree" and audit jargon.
+- Added a sentence that htop-gpu avoids asking network shares and FUSE mounts about open files.
+
+Facts checked against the meter code (the AMD video meter shows busy % plus vclk/dclk; the CPU power meter is Intel RAPL). Committed and pushed at the user's request; Codex's finding 42 records were left uncommitted.
+
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — push and install 3.5.3-18
 
 At the user's request.
