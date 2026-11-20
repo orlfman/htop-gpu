@@ -1,6 +1,6 @@
 # htop-gpu audit findings
 
-Original audit: 2026-10-28 (America/Phoenix). Latest full project audit: 2026-11-11 (Codex). Latest audit: 2026-11-19 (Claude Code, findings 39–41 fixed and verified).
+Original audit: 2026-10-28 (America/Phoenix). Latest full project audit: 2026-11-11 (Codex). Latest audit: 2026-11-19 (Codex, CPU package power findings 48–50 fixed and verified).
 Auditors: Codex and Claude Code. Newest sections are at the top; the 2026-10-28 audit and older follow-ups start at "Scope and baseline".
 Status: findings 1-6 are resolved and validated; finding 6 is committed (`6c06d243`) and retained in installed `htop-gpu 3.5.3-12`, which labels CPU power Pwr. Finding 7 (P3) is deferred at the user's request. Finding 8 (P2, Intel client access loss reported as zero) is fixed and validated in 3.5.3-12; see the fix validation below.
 Findings 9-13 (P3, heading meters, Claude Code self-audit 2026-10-29): 9, 10, 11 and 13 are fixed (htop `44265679`, `798d8cfa`; installed in 3.5.3-13), 12 is accepted; see the last two sections.
@@ -18,7 +18,171 @@ Finding 32 (P3, `stat()` through `/proc/<pid>/fd/N` reaches each descriptor's ow
 Findings 33–34 (alternate DRM node paths and optional syscall support) are fixed and verified in htop `1c205705` (installed in 3.5.3-18, Claude Code).
 The original 33–34 reproductions also pass independently. Findings 35–38 from the follow-up audit are fixed and verified in htop `1c205705` (installed in 3.5.3-18, Claude Code).
 Independent retesting confirmed fixes 35–38. Findings 39–41 are fixed and verified in htop `1c205705` (installed in 3.5.3-18, Claude Code).
+Independent retesting confirmed the original cases for findings 39–41 in 3.5.3-18. Finding 42 is open. Findings 43–47 (CPU package power; Claude Code) and 48–50 (Codex) are fixed and verified in htop `cf48f0a7`, and the GPU meters' pause fix in `e33c31ec` (packaged as 3.5.3-19, not yet installed).
 P2 means normal priority; P3 means low priority.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — audit of Codex's fixes for findings 48–50
+
+Reviewed Codex's uncommitted rewrite of `linux/IntelRAPL.c` (over htop `1c205705`) and its new RAPL scenarios. Findings 48–50 were gaps in my finding 43–47 sampler fix, and I agree with all three.
+
+Findings: none.
+
+- 48: `IntelRAPL_readZone()` re-reads each source's `name` on every refresh. A mismatch returns false, and `IntelRAPL_refresh()` rediscovers and resamples once, then forgets if the retry fails. Partial totals and baselines are discarded, so a recycled `intel-rapl:N` path can no longer be credited to the old package.
+- 49: `fstat()`, `name`, `energy_uj`, `max_energy_range_uj` and the limit are all read through one `O_DIRECTORY` file descriptor (`Compat_readfileat()`, or `/proc/self/fd/N` without `openat`), so the identity and the counter cannot come from different directories.
+- 50: the limit comes from the first source with a positive long-term limit, MSR first, independently of which source supplies energy. The combined limit still requires every package to have one.
+- Denied energy on every source of a package now finishes the loop and then reports no access for the aggregate, which matches the earlier "one denied package invalidates aggregate watts" behavior. I saw no new edge cases: the loop stops once both energy and a limit are found, and the MMIO directory is only opened when it is needed.
+- The meters and `linux/MeterClock.h` are unchanged from my version.
+
+Checks:
+
+- Build: no warnings. STYLE OK, `test-check-style.sh` ALL PASSED, `git diff --check` clean in both repos.
+- `test-rapl.py`: 129 ok, ALL PASSED, including the new zone-change-during-read, reused-path and MMIO-PL1 scenarios, both widths, the 200-column pause check, and live idle 8.5 W / busy 126.4 W against 250 W.
+- `test-headings.py`: 32 ok. `test-sampler.py`: 198 ok. `test-intel-gpu.py --mutations`: 323 ok (live on xe).
+
+Limits: I did not re-run the pre-fix sampler against the new scenarios (Codex reports six failures) or the no-`openat` build (Codex reports 90 passing). CPU power hardware coverage is still only the 270K Plus; AMD CPUs are fixtures only. Uncommitted.
+
+## 2026-11-19, Codex — fix findings 48–50
+
+Fixed in the development tree on htop `1c205705` and project `dded226`.
+
+- **48:** Each source must still report the expected package name when opened. A mismatch discards partial totals, rediscovers packages, and starts fresh baselines. Rediscovery retries once in that refresh. The original two-package remap now yields 50 W and a 190 W combined limit. The previous sampler yielded 80 W and a 375 W limit.
+- **49:** The sampler reads the zone identity, name, energy counter, wrap range and limit through one opened directory. The test replaces the path immediately after the identity check while leaving the old directory readable. That interval yields 5 W from the original counter, followed by a fresh baseline and then 2 W on the replacement. The previous sampler yielded a 262,094.3 W spike. Ordinary wraparound and permission recovery still pass.
+- **50:** The sampler chooses the first valid positive long-term limit for each package, preferring MSR over MMIO independently of energy selection. The fixture verifies a 65 W limit while MSR energy remains usable and 20 W against that same limit after MSR disappears. The aggregate still requires a valid limit for every counted package.
+
+The full RAPL suite passed all 129 checks, including 200- and 48-column meter tests under ASan and UBSan. The original sampler failed six of the new assertions. A sampler build with `HAVE_OPENAT` disabled passed 90 checks, including replacement during a read through the directory descriptor. Build, style, all 198 AMD GPU sampler checks and both `git diff --check` runs passed.
+
+On the 270K Plus, MSR reported 8.56 W idle, 126.46 W under load, and a 250 W long-term limit. With only the real MMIO zone exposed to the test sampler, it reported 9.06 W against 9.09 W from directly timed energy reads. Multi-package remapping, replacement during a read, AMD CPU behavior and the MMIO limit transition were verified with fixtures. The changes are uncommitted and the installed package is 3.5.3-18.
+
+## 2026-11-19, Codex — independent audit of the power fixes and shared meter clock
+
+Audited Claude Code's uncommitted working tree on htop `1c205705` and project `dded226`. The original cases for findings 43–47 pass. Three follow-up findings are open. The installed package is 3.5.3-18.
+
+### 48 (P2) — a reused powercap path can double-count one package and omit another
+
+`src/htop/linux/IntelRAPL.c:129` matches the package name to an interface path during discovery. On a directory identity change, the refresh at line 235 discards the old baseline but still assigns the new directory to the old package. Powercap allocates and releases directory IDs independently of the exported package name. In a two-package fixture, both MMIO zones stayed readable while `intel-rapl:0` changed from package 0 to package 1. After the baseline refresh, package 0 consumed 10 W and package 1 consumed 40 W. The sampler reported 80 W across two packages. It used the MSR and MMIO counters for package 1 and skipped package 0. Revalidate the package name when the directory changes and regroup before using the new baseline. [Linux powercap zone allocation and release](https://linux.googlesource.com/linux/kernel/git/torvalds/linux/+/81122fba08fa3ccafab6ed272a5c6f2203923a7e/drivers/powercap/powercap_sys.c)
+
+### 49 (P2) — a replacement between stat and read still produces a one-interval spike
+
+`src/htop/linux/IntelRAPL.c:206` stats the directory and opens its energy file through a separate path lookup at line 209. A test hook renamed the old directory out of the way and moved a replacement into place immediately after the second successful `stat()`. The sampler read 1 J from the replacement and treated it as the old 50 J counter wrapping, yielding **262,094.3 W** over one second. The next refresh saw the new inode. Replacing the directory entirely between refreshes passes the original regression. The fix needs to take the directory identity and read the counter through the same opened directory. Read the name and wrap range from that directory as well.
+
+### 50 (P3) — the long-term limit can stay missing after a switch to MMIO
+
+`src/htop/linux/IntelRAPL.c:160` selects the MSR limit whenever its path string was discovered. A stateful fixture started with a 250 W MSR limit and a 65 W MMIO limit. After the MSR directory was removed, MMIO continued to supply 20 W, but the aggregate limit stayed unavailable in the same session. Starting with the surviving MMIO zone alone uses its limit. Keep the MSR limit while it supplies a valid value, then check the available MMIO zone for that same package if the MSR directory has gone away. Only advertise a combined denominator when every included package supplies one.
+
+### Verification and limits
+
+- Build and style passed. RAPL **115**, headings **32**, AMD GPU **198** and Intel GPU **323** checks all passed, including the Intel mutation tests, with no sanitizer reports in those suites. Both repositories passed `git diff --check`.
+- On the Core Ultra 7 270K Plus with Linux 7.3.4 and xe, a throwaway htop layout showed `Pwr` changing from 9.9 W to 11.2 W and Intel video changing from sleep to 32% during an encode while the process list displayed `PAUSED`. The AMD usage meter also updated in the stateful full-htop fixture. This verifies the shared clock through the actual meter entry points.
+- With only the live Intel MMIO zone exposed to the standalone sampler by a temporary symlink, it reported **9.03 W** against **9.11 W** from an independently timed energy delta. MSR/MMIO preference, deduplication and permission recovery pass against fixtures.
+- An empty discovery root compiled into a disposable live sampler now triggers a test failure with readable host sysfs. The captured delete-character sequence now renders `Pwr:9.6W limit:250W`; the decoder tests cover insertion too. RAPL CPU hardware testing remains limited to the 270K Plus. Package remapping, counter replacement during a read, multi-package aggregation and AMD CPU behavior were checked with fixtures.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — GPU header meters keep updating while paused
+
+At the user's request, following finding 43. The AMD and Intel GPU header meters had the same freeze as package power: they keyed their samples to `monotonicMs`, which stops while the process list is paused (`Z`).
+
+- New `linux/MeterClock.h` (registered in `Makefile.am`) with `MeterClock_now(host)`, used by `AMDGPUMeter.c`, `IntelGPUMeter.c` and `IntelRAPLMeter.c`, which replaces my finding 43 helper. Once per header pass (detected by `host->realtimeMs`), it returns `monotonicMs` when that advanced, otherwise a fresh `Platform_gettime_monotonic()` reading. Outside a pause, the samplers therefore get exactly the timestamp they had before, and the Intel mount table cache stays shared with the GPU% column, which still keys to `monotonicMs` (finding 38). During a pause, the meters keep advancing.
+- Because `Makefile.am` changed, the dev tree was regenerated with `./autogen.sh` and `./configure` using the options from `config.status`. The installed automake is 1.20; the old generated files wanted 1.19. Generated files are git-ignored.
+- `tools/test-headings.py`: new `pause_test()` against the fake-AMD full htop build at 200 columns. It shows 11%, presses `Z`, confirms "PAUSED", then expects 77% while paused and 33% after resuming. `IntelGPUMeter.c` was added to the rebuilt sources.
+
+Checks:
+
+- Build: no warnings. STYLE OK, `test-check-style.sh` ALL PASSED.
+- `test-headings.py`: 32 ok, ALL PASSED. With `AMDGPUMeter.c` temporarily reverted to `monotonicMs`, "usage follows the card to 77% while paused" failed; the file was restored and its hash checked.
+- `test-rapl.py`: 115 ok, including the 200-column pause check through the shared helper. `test-sampler.py`: 198 ok. `test-intel-gpu.py --mutations`: 323 ok (live on xe).
+- Live, the real dev htop on xe with `IntelGPUInfo IntelGPUVideo AMDGPUUsage`: after `Z`, a hardware encode raised Vid from asleep to 29% while "PAUSED" was shown.
+
+Limits: the Intel meter pause behavior was checked live only, since there is no fake full-htop fixture for it. Uncommitted, with the other CPU power work.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — fixes for findings 43–47
+
+Fixed at the user's request, in the uncommitted working tree over htop `1c205705`, on top of Codex's uncommitted AMD CPU package power work. Booted on xe; RAPL is unaffected by the GPU driver. Each finding was verified against the code first.
+
+- 43: confirmed in `ScreenManager.c`: `Machine_scan()` and `Header_updateData()` still run while paused, but `monotonicMs` only advances in `Machine_scanTables()`, which the pause skips. `IntelCPUPowerMeter_updateValues()` now keys the sample to `IntelCPUPowerMeter_timestamp()`. It reads `Platform_gettime_monotonic()` once per header pass, detected by a change in `host->realtimeMs`, and shares it across meter instances. The AMD and Intel GPU header meters had the same freeze; they were fixed afterwards with the shared `linux/MeterClock.h` (see the section above).
+- 44 and 45: zones are now grouped by package name across `intel-rapl:N` (MSR, preferred) and `intel-rapl-mmio:N` (fallback), so each package is counted once. Each refresh, the first interface whose `energy_uj` is readable supplies the package; its zone directory is `stat()`ed before the read. A change of interface, or of the directory's device or inode (a zone recreated at the same path), starts a new baseline and re-reads `max_energy_range_uj` instead of treating a lower value as a wrap. Denied on every interface means no access; nothing readable and not denied means forget and rediscover, as before. PL1 comes from the MSR zone when the package has one. Live layout here: `intel-rapl:0` and `intel-rapl-mmio:0` both report `package-0`, and both counters are readable.
+- 46: `live_test()` now checks sysfs independently (`live_packages()` and `live_readable_counters()`, MSR first, then MMIO). It skips only when no package counter is readable, fails when sysfs has a readable counter but the sampler is not active, and checks the package count. `live_limits()` groups packages the same way the sampler does.
+- 47: `decode_screen()` in `tools/htop-capture.py` implements `CSI n P` (delete characters, row shifts left, blanks at the end) and `CSI n @` (insert blanks, row shifts right). The token pattern now accepts `@` as a final byte.
+
+Tests in `tools/test-rapl.py`:
+
+- New scenarios: replaced package counter (a new directory swapped in at the same path; new baseline, then 2.0 W, then a genuine wrap still counted); MMIO by itself (20 W); both interfaces counted once (10 W from MSR with MMIO ignored); unreadable MSR falling back to MMIO (15 W, switching back to MSR with a new baseline, then both denied giving no access).
+- The two scenarios that expected no access or a forgotten zone with a readable MMIO copy now use an MSR-only package.
+- New `decoder_test()` for a value getting shorter and longer, colors included.
+- The full htop test presses `Z` at 200 columns: while "PAUSED" is shown, the meter follows a new 12 W feed rate, and after resuming it follows 42.5 W again. At 48 columns the function bar is truncated, so "PAUSED" is not visible and that check only runs at 200 columns.
+- Also fixed IWYU (`<stdint.h>`, `"Machine.h"`) and astyle in the touched files.
+
+Checks:
+
+- Build: no warnings. STYLE OK, `test-check-style.sh` ALL PASSED, `git diff --check` clean in both repos.
+- `test-rapl.py`: 115 ok, ALL PASSED, including live (one package; PL1 250 W; idle 9.5 W, busy 126.6 W; live htop text) and the 200-column pause check.
+- `test-headings.py`: 27 ok, ALL PASSED, since it shares the decoder.
+- Proof runs on copies (the real files untouched): the pre-fix sampler gave 262,094.3 W for the replaced counter and `not_found` for MMIO only. The live test against a sampler built with an empty tree now fails ("sysfs has intel-rapl:0 … but the sampler says not_found") instead of skipping. The decoder without delete and insert turned the case into `Pwr:90.6W` and `Pwr:[1@10`.
+
+Findings 43–47 are resolved.
+
+Limits:
+
+- The pause fix is proven by the new full-htop check; I did not rebuild a full htop with the old meter to watch it fail.
+- A physically reset counter that keeps the same sysfs directory is still indistinguishable from a wrap.
+
+Nothing is committed or packaged; it stays with Codex's uncommitted AMD CPU power work.
+
+## 2026-11-19, Codex — CPU package power audit
+
+Reviewed the uncommitted Intel and AMD CPU power sampler, four meter modes and test changes on htop `1c205705`, with project files based on `dded226`. Installed htop-gpu is 3.5.3-18. Re-read the updated project agent guide, changelog, upstream guidance and AMD CPU plan. Findings 43–47 are open. The sampler limitations in 43–45 also exist in the base implementation. This review changed audit and status records only.
+
+### 43 (P2) — pausing the process list freezes package watts
+
+`src/htop/linux/IntelRAPLMeter.c:65` keys the sample to the process-table timestamp. Pressing `Z` skips the update to that timestamp while htop continues updating the header (`src/htop/ScreenManager.c:148`). On the 270K Plus, a private PTY and syscall trace showed five energy reads before the pause, zero during a 1.81 s paused window and five after resuming. The meter held at 16.7 W while the independent counter advanced by 15.98 J (about 8.8 W). In graph mode the header can keep appending the stale value. Use a timestamp that advances once per system/header refresh and stays shared across instances of the meter. Exercise the actual pause shortcut in a regression test.
+
+### 44 (P2) — a replacement package counter can produce a spurious power spike
+
+`src/htop/linux/IntelRAPL.c:193` treats a lower reading inside the old range as a wrap. The sampler retains the old counter and range when a package disappears and is recreated at the same path entirely between refreshes. Reproduced under one sampler by replacing the zone directory after a 50,000,000 µJ baseline. Its replacement started at 1,000,000 µJ, with a range of 262,143,328,850 µJ. One second later the sampler reported **262,094.3 W**. The existing removal test observes the missing directory on an intervening refresh. Track the identity of the counter or zone across samples and establish a new baseline when it changes. Keep the valid wrap test. This reproduction covers a replaced sysfs object, not an asserted physical CPU reset.
+
+### 45 (P2) — a readable Intel MMIO package by itself gives N/A
+
+`src/htop/linux/IntelRAPL.c:107` excludes every `intel-rapl-mmio:N` zone. Skipping the second interface prevents double counting, but a package with only a readable MMIO interface can supply watts. Pointed a temporary powercap tree at the 270K Plus's **real** MMIO package as its only zone. Its counter advanced from 236,618,911,954 to 236,620,770,286 µJ. The sampler returned `not_found` twice. The real host exposes both interfaces. A live Mission Center trace below confirms MMIO is used on this hardware. Prefer one readable source per logical package or die, fall back when needed, and re-baseline on source changes. Test both views of the same package, MMIO alone, and unreadable MSR with readable MMIO.
+
+### 46 (P3) — a discovery regression can skip live validation on working hardware
+
+`tools/test-rapl.py:134` takes the first result from the sampler under test as its reason to skip the live checks. With the real package counter readable and increasing by 1,397,092 µJ, a disposable negative control compiled the live sampler against an empty tree. The live check printed `SKIP live watts: not_found` and returned with zero failures. Establish availability independently from sysfs before deciding to skip. A readable supported counter should require the sampler and full meter checks to run.
+
+### 47 (P3) — terminal capture can corrupt a correct wattage and fail the suite
+
+The terminal decoder at `tools/htop-capture.py:20` consumes the CSI delete-character command (`P`) without shifting the row. Captured ncurses actually emitted `CSI 1 P` on the power row as the number shrank. A minimal width transition with a delete and overwrite reconstructs `Pwr:9.60W` instead of `Pwr:9.6W`. The unmodified suite failed the live display assertion at `tools/test-rapl.py:166` on that malformed output while the bar showed 9.6 W. Implement delete-character semantics in the shared decoder and test a two-digit to one-digit transition with the suffix and colors intact. Relaxing the wattage regex would mask the corruption.
+
+### Validation and scope
+
+- Normal build and style passed. The RAPL suite completed 92 of 93 checks successfully. The only failure was the terminal replay in finding 47. All deterministic sampler and full htop fixture checks passed, including fractional watts, one wrap, permission recovery, two packages, optional PL1 and all four modes at both widths. No ASan/UBSan reports. The adjacent AMD GPU suite passed all 198 checks.
+- On the 270K Plus (Linux 7.3.4-1-cachyos), the live sampler measured 8.57 W at idle, 125.96 W under CPU load and a 250 W PL1. During a headless Vulkan workload, 34 successive ~250 ms sampler readings were within 0.34 W of an independently timestamped direct MSR energy delta. MangoHud 0.8.4-1.1 logged ten whole-watt CPU samples (26–54 W) during the same run at a different cadence. [MangoHud v0.8.4 CPU collector](https://github.com/flightlessmango/MangoHud/blob/v0.8.4/src/cpu.cpp)
+- Mission Center 1.2.0-1.1 probed both package energy paths on the same machine and then repeatedly read the MMIO one. Its traced energy delta over 5.047 s corresponds to **12.22 W**, compared with **12.04 W** from the time-weighted htop-gpu MSR samples over that window (partial endpoint intervals estimated). These are collector measurements, not a scrape of Mission Center's displayed text. [Magpie source pinned for Mission Center 1.2.0](https://gitlab.com/mission-center-devs/gng/-/blob/a5272b3c1d853caa4044b737cf49257bfc4c86f2/platform-linux/src/cpu/power_draw.rs)
+- AMD validation here is simulated. The Linux AMD mapping and a confirmed upstream report on Zen 5 including Strix Halo support package RAPL as a source. This audit did not run htop-gpu on Ryzen, EPYC, Tiger Lake or a physical multi-socket host. [Linux v6.17 RAPL driver](https://github.com/torvalds/linux/blob/v6.17/drivers/powercap/intel_rapl_msr.c) · [MangoHud hardware report](https://github.com/flightlessmango/MangoHud/issues/1874)
+- Two known discovery limits still apply. Finding 7 (packages appearing after startup) remains deferred. The separately documented eight-zone cap is silent: nine already-present fixture zones contributing 10 W each returned 80 W and eight packages. Also, the README permission rule is the author's single-package example. A two-package fixture with permission on package 0 only correctly returned `no_access`. The AMD changes remain in the development source, pending packaging.
+
+## 2026-11-19, Codex — AMD CPU package power validation
+
+Validated the development tree based on htop `1c205705` and outer repository `dded226`. No new actionable findings in the tested scope. The installed package is 3.5.3-18.
+
+- The sanitized RAPL suite passed all 93 checks. With no constraint files, a 10.625 J increase in 250 ms gives 42.5 W. An AMD-shaped two-package fixture gives 30 W, excludes the core and MMIO zones, and omits the combined denominator when either package lacks a positive PL1. Loss of access to one package invalidates aggregate watts.
+- Full htop under ASan and UBSan passed at 200 and 48 terminal columns. Watts appear in text, bar, graph and LED modes when PL1 is absent. A positive limit restores the fill and percentage chart. The fixtures switch through missing, zero, malformed and restored limits inside the same process. Permission loss displays `no access` even when PL1 is readable. A constant counter displays 0.0 W after recovery. Setup showed the vendor-neutral names, and saved meter IDs loaded the AMD heading and all four modes. No sanitizer reports.
+- Negative control on the full released source `1c205705` reproduced `Pwr:N/A` with the same readable AMD-style counter and absent PL1.
+- Live on the Intel Core Ultra 7 270K Plus, RAPL reported 33.0 W at idle and 130.0 W with all available CPU threads busy. The sampled and displayed PL1 both matched the 250 W sysfs limit.
+- The development build completed without new warnings and the style check reported STYLE OK. The AMD GPU sampler (198), heading (27) and config path (33) suites passed. Both repositories passed `git diff --check`.
+
+AMD CPU coverage is simulated. The sampler discovers the packages present at initialization. A package that appears later can still be missed, as recorded in deferred finding 7.
+
+## 2026-11-19, Codex — verification of findings 39–41 in 3.5.3-18
+
+Reviewed htop `1c205705` and packaging repo `1e559ce`. The three original reproductions pass.
+
+- **39:** A known device with usable DRM fdinfo retained one client, 20% usage and 1 MiB during a simulated mount-table gap. The Intel suite also verified recovery with history intact and recognition of an alternate device name on an overlay filesystem.
+- **40:** The original resolver benchmark now gives 0.27, 1.03 and 3.38 ms per 1,000 lookups with 100, 500 and 2,000 synthetic mounts. The previous results were 1.17, 4.99 and 20.63 ms. Both comparisons use optimized builds and the median of three runs. These timings cover path resolution only.
+- **41:** The variant built with `SYS_statx` undefined linked and completed the full fixture suite. The other two fallback variants and all seven mutation checks passed.
+
+### 42 (P3) — an unclassified known client can still look idle if its fdinfo is generic only
+
+`linux/IntelGPU.c:507` treats generic-only fdinfo as an unrelated file whenever the descriptor path is unclassified. A stateful fixture first established a real client for the sampler. On the next refresh it supplied generic-only fdinfo with normal open flags. With mountinfo present, the output correctly reported unavailable usage and memory with incomplete coverage. Removing mountinfo on the following refresh, while keeping the same descriptor target and fdinfo text, changed the output to 0% and zero bytes with complete coverage. This is a narrower case than finding 39. The 39 fix preserves the client when its DRM identity remains readable. Extend the finding 23 handling to account for an already-known client during a classification gap while preserving clean removal when a descriptor is replaced. The combined failure was reproduced with synthetic procfs only.
+
+The htop rebuild, style check, seven style-checker tests, 323 Intel checks with live Xe workloads, and 198 AMD checks passed. All 17 patch checksums matched. Applying them to upstream 3.5.3 reproduced all 368 files in htop `1c205705`, including file modes and symlink targets. The installed executable matched the 3.5.3-18 package archive, and the package integrity check reported zero altered files. A live smoke test of that executable at 0.1 s with GPU% enabled showed 32% Intel video usage during hardware encoding. Only the audit and handoff records were edited.
 
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — fixes for findings 39–41
 

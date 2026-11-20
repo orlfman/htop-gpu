@@ -4,17 +4,19 @@
 Runs the real dev htop in a pty (htop-capture.py) with only the two headings in the header.
 1. CPU name: a fake cpuinfo per case ((R)/(TM) in any case, " @ GHz", spacing, length, missing)
 2. AMD heading: the fake card (fake-sysfs.py) changes state under ONE running htop
-3. live: the normal dev binary shows this machine's CPU and card names
+3. pause: the AMD GPU usage meter keeps following the fake card while the process list is
+   paused (Z), as the header does (linux/MeterClock.h, shared by the GPU and CPU power meters)
+4. live: the normal dev binary shows this machine's CPU and card names
 
 The heading sources (and linux/AMDGPU.c) are rebuilt with a fake cpuinfo / sysfs root and
 ASan + UBSan, then rebuilt normally. Needs src/htop configured (./configure) and the 9070 XT
 (fake-sysfs.py copies its files). Run: python3 -I test-headings.py
 """
-import os, re, shutil, subprocess, sys, tempfile, time
+import os, re, runpy, shutil, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.normpath(os.path.join(HERE, "..", "src", "htop"))
-SOURCES = ["linux/AMDGPU.c", "linux/AMDGPUMeter.c", "linux/IntelRAPLMeter.c"]
+SOURCES = ["linux/AMDGPU.c", "linux/AMDGPUMeter.c", "linux/IntelRAPLMeter.c", "linux/IntelGPUMeter.c"]
 SANITIZE = "-fsanitize=address,undefined -fno-omit-frame-pointer"
 CARD = "Radeon RX 9070 XT"
 failures = []
@@ -117,6 +119,36 @@ AMD_CASES = [
 ]
 
 
+def pause_test(binary, sysfs, tmp):
+    """htop freezes the process list on Z but keeps updating the header; so must the GPU meters."""
+    print("[AMD GPU usage while the process list is paused (Z)]")
+    HtopSession = runpy.run_path(f"{HERE}/test-rapl.py")["HtopSession"]
+    rc = f"{tmp}/pause.htoprc"
+    write(rc, "config_reader_min_version=3\nheader_layout=one_100\ndelay=2\n"
+              "column_meters_0=AMDGPUUsage\ncolumn_meter_modes_0=1\n")
+    fake_card(sysfs, "--write", "gpu_busy_percent=11")
+    usage = lambda rows, value: any(re.match(rf"GPU\[.*\b{value}%\]", row) for row in rows)
+    paused = lambda rows: any("PAUSED" in row for row in rows)
+    session = HtopSession(binary, rc, 200, dict(os.environ))
+    try:
+        ok, rows = session.until(lambda s: usage(s, 11))
+        check("usage before the pause: 11%", ok, repr(rows[:3]))
+        os.write(session.fd, b"Z")
+        ok, rows = session.until(paused)
+        check("Z pauses the process list", ok, repr(rows[-3:]))
+        fake_card(sysfs, "--write", "gpu_busy_percent=77")
+        ok, rows = session.until(lambda s: paused(s) and usage(s, 77))
+        check("usage follows the card to 77% while paused", ok, repr(rows[:3]))
+        os.write(session.fd, b"Z")
+        fake_card(sysfs, "--write", "gpu_busy_percent=33")
+        ok, rows = session.until(lambda s: not paused(s) and usage(s, 33))
+        check("usage follows the card to 33% after resuming", ok, repr(rows[:3]))
+    finally:
+        status = session.close()
+    check("pause test htop exits cleanly", status == 0, f"exit {status}")
+    fake_card(sysfs)
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="htop-headings-")
     try:
@@ -147,6 +179,8 @@ def main():
             during = None if switch is None else (lambda s=switch: fake_card(sysfs, *s))
             _, (amd, colors) = headings(rc, binary, 4 if during else 1.5, during)
             check(f"{name}: {want!r}", amd == want and colors == f"[cyan]{want}", f"got {amd!r} {colors!r}")
+
+        pause_test(binary, sysfs, tmp)
 
         print("[sanitizers]")
         reports = os.listdir(logs)

@@ -1,0 +1,59 @@
+From e33c31ec18b4b6dd9d12eda9795589402971b9e3 Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 19:40:55 -0700
+Subject: [PATCH 19/19] linux: keep GPU header meters updating while paused
+
+The AMD and Intel GPU header meters keyed their samples to
+monotonicMs, which stops while the process list is paused (Z) even
+though htop keeps updating the header. Use MeterClock_now() like the
+CPU power meter. Outside a pause it is monotonicMs itself, so the Intel
+mount table stays shared with the GPU% column.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ linux/AMDGPUMeter.c   | 3 ++-
+ linux/IntelGPUMeter.c | 3 ++-
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/linux/AMDGPUMeter.c b/linux/AMDGPUMeter.c
+index aa2ec94f..cdc916e7 100644
+--- a/linux/AMDGPUMeter.c
++++ b/linux/AMDGPUMeter.c
+@@ -22,6 +22,7 @@ in the source distribution for its full text.
+ #include "Settings.h"
+ #include "XUtils.h"
+ #include "linux/AMDGPU.h"
++#include "linux/MeterClock.h"
+ 
+ 
+ static const int AMDGPUInfoMeter_attributes[] = {
+@@ -79,7 +80,7 @@ static const char* const AMDGPUTempMeter_labels[AMDGPU_TEMP_COUNT] = {
+ #define AMDGPU_TEMP_HOT_MARGIN  10.0
+ 
+ static const AMDGPUSample* AMDGPUMeter_getSample(const Meter* this) {
+-   return AMDGPU_getSample(this->host->monotonicMs);
++   return AMDGPU_getSample(MeterClock_now(this->host));
+ }
+ 
+ /* Puts "sleep" or "N/A" in the meter text if the card, the value or its total is not available */
+diff --git a/linux/IntelGPUMeter.c b/linux/IntelGPUMeter.c
+index e3aa4a75..e034f12c 100644
+--- a/linux/IntelGPUMeter.c
++++ b/linux/IntelGPUMeter.c
+@@ -20,6 +20,7 @@ in the source distribution for its full text.
+ #include "RichString.h"
+ #include "XUtils.h"
+ #include "linux/IntelGPU.h"
++#include "linux/MeterClock.h"
+ 
+ 
+ static const int IntelGPUMeter_attributes[] = { GPU_ENGINE_3 };
+@@ -28,7 +29,7 @@ static const int IntelGPUMemoryMeter_attributes[] = { MEMORY_1 };
+ static const int IntelGPUInfoMeter_attributes[] = { METER_TEXT };
+ 
+ static const IntelGPUSample* IntelGPUMeter_getSample(const Meter* this) {
+-   return IntelGPU_getSample(this->host->monotonicMs);
++   return IntelGPU_getSample(MeterClock_now(this->host));
+ }
+ 
+ static const char* IntelGPUMeter_status(const IntelGPUSample* sample) {

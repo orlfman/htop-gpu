@@ -3,6 +3,74 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-11-19, Claude Code (Claude Opus 5.5) — commit and package 3.5.3-19
+
+At the user's request; not pushed, not installed.
+
+- htop `amdgpu-meters`: `cf48f0a7` "linux: support AMD CPU package power and harden RAPL sampling". It contains Codex's AMD CPU power, findings 43–47 (mine) and 48–50 (Codex), and adds `linux/MeterClock.h` with its `Makefile.am` entry. Then `e33c31ec` "linux: keep GPU header meters updating while paused". Each commit takes whole files, and the first builds on its own because it leaves the GPU meters untouched.
+- `pkgrel=19`; the patches were re-exported (new 0018 and 0019; 0001–0017 changed only in their numbering). Applying all 19 to a fresh `git archive 3.5.3` reproduces the whole `amdgpu-meters` tree with no rejects, and all 19 checksums match.
+- `makepkg -fC` built `htop-gpu-3.5.3-19-x86_64.pkg.tar.zst`. namcap shows the same three messages as before. The packaged binary reports `3.5.3-19-gpu`, and a capture with a copy of the user's config showed the CPU, Radeon and iGPU headings, GPU usage and package power.
+- Docs: the PLAN.md, AUDIT.md and AGENTS.md status lines now point at the commits. The project repo also carries Codex's AMD CPU power plan (`PLAN-AMD-CPU-POWER.md`), its README and test/tool changes, my AGENTS.md reference-projects section, and the audit records.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — audit Codex's fixes for 48–50
+
+Audit only, no code changes. No findings: package names are rechecked through the opened directory with a regroup (48), identity and counter come from one directory handle (49), and PL1 falls back to MMIO (50). Build and style clean; RAPL 129 (with live), headings 32, AMD 198 and Intel 323 checks pass. Recorded in AUDIT.md. Uncommitted.
+
+## 2026-11-19, Codex — fix RAPL findings 48–50
+
+The sampler checks package names through opened zone directories and regroups when a path changes packages. The same directory handle supplies the counter identity and data. A positive MMIO long-term limit takes over when MSR has no valid one.
+
+All 129 RAPL and 198 AMD GPU sampler checks passed, along with the build and style check. The old sampler failed the new regressions. The build without libc `openat()` passed 90 standalone checks. Live MSR and MMIO checks passed on the 270K Plus. AMD CPU hardware validation is pending. See [AUDIT.md](AUDIT.md).
+
+Development changes are uncommitted. Installed version is 3.5.3-18.
+
+## 2026-11-19, Codex — audit Claude's CPU power fixes and shared meter clock
+
+Verified the original cases for findings 43–47. Opened findings 48–50 in [AUDIT.md](AUDIT.md) for package double-counting after zone path reuse, a false spike during counter replacement, and loss of the MMIO limit after the MSR zone disappears. Build and style passed, along with 115 RAPL, 32 heading, 198 AMD GPU and 323 Intel GPU checks. Live on xe, CPU watts and Intel video updated with the process list paused. A separate live MMIO-only test agreed with direct counter reads. AMD CPU validation still uses fixtures.
+
+The audit records and earlier code and test changes are uncommitted. Installed version is 3.5.3-18.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — GPU meters keep updating while paused
+
+At the user's request. New `linux/MeterClock.h`: header meters use `monotonicMs` when it advances and their own clock reading while the process list is paused (`Z`). All three meters (AMD GPU, Intel GPU, CPU package power) use it. The Intel mount table stays shared with GPU% outside a pause. `Makefile.am` registers the header, and the dev tree was regenerated with autogen and configure (automake 1.20). New fake-AMD pause test in `test-headings.py`; it fails with the old timestamp. Build and style clean; headings 32, RAPL 115, AMD 198 and Intel 323 checks pass. Live on xe, Vid rose to 29% during an encode while paused. Uncommitted.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — fix findings 43–47 (CPU package power)
+
+At the user's request, on top of Codex's uncommitted AMD CPU power work.
+
+- 43: the meter keys to a monotonic timestamp taken once per header pass, so watts keep updating while the process list is paused (`Z`).
+- 44, 45: zones are grouped per package across the MSR and MMIO interfaces, MSR first with MMIO as fallback. A new baseline starts whenever the interface or the zone directory's identity changes, so a replaced counter no longer reads as a wrap.
+- 46: the live test checks sysfs itself before skipping.
+- 47: the capture decoder implements character delete and insert.
+
+New scenarios, a decoder test and a 200-column pause check were added. Proof runs showed the old code failing each one. Build and style clean, RAPL suite 115 passed with live, headings 27 passed. Uncommitted. Not changed: the GPU header meters, which still freeze while paused.
+
+## 2026-11-19, Codex — audit CPU package power reporting
+
+Opened findings 43–47 in [AUDIT.md](AUDIT.md) for frozen watts during process-list pause, a false spike after counter replacement, missing MMIO-only packages, a live-test false pass and a terminal-capture false failure. Compared the 270K Plus sampler with direct RAPL reads, MangoHud and Mission Center. The build, style and 198 AMD GPU checks passed. The RAPL suite passed 92 of 93 checks. AMD CPU hardware validation remains pending.
+
+Audit records are uncommitted. The earlier source and test changes are still uncommitted. Installed package remains 3.5.3-18.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — reference projects in AGENTS.md
+
+Docs only, at the user's request. New AGENTS.md section "Reference projects". Agents must study MangoHud, Mission Center, nvtop, amdgpu_top and Intel's igt-gpu-tools (intel_gpu_top for i915, gputop for xe) before adding or changing how a value is read, or claiming support for untested hardware, since the user only has the 270K Plus and the RX 9070 XT. The section covers what each project is useful for, pinned source links in PLAN/AUDIT, comparing at least two, kernel source as tie-breaker, live side-by-side checks with versions, and licensing. Mission Center and nvtop are GPL-3.0-or-later (study only, never copy). MangoHud, amdgpu_top and igt-gpu-tools are MIT (prefer rewriting; keep notices if adapted). Licenses come from the installed packages, the GitHub license API and the AUR. Four tools are installed; igt-gpu-tools is not. Corrected after the user found a stale GitHub mirror: each project now has its upstream URL (all active in November 2026). intel_gpu_top is i915 only and has rejected xe since March 2026 (igt commit "tools/intel_gpu_top: explicitly reject Xe devices", issue 186), so gputop is listed for xe. The AUR igt-gpu-tools (1.30) lags upstream v2.6. Uncommitted; Codex's AMD CPU power work in the tree was left untouched.
+
+## 2026-11-19, Codex — implement AMD CPU package power
+
+The existing `Pwr` meter accepts watts from readable AMD or Intel RAPL package counters. PL1 enables bar fill and the percentage graph when available. Watts fill the numeric displays when PL1 is absent, including a text fallback in the graph area. The saved meter IDs still load and the Setup names now apply to both vendors.
+
+The RAPL suite passed 93 checks with simulated AMD and live Intel. The old meter reproduced the watts-only regression. The build, style, AMD GPU sampler, heading and config path checks passed. See [AUDIT.md](AUDIT.md) for the evidence and [the AMD CPU plan](PLAN-AMD-CPU-POWER.md) for pending hardware validation.
+
+The sampler and meter in the nested source checkout and the outer tests and documentation are uncommitted. The installed package is 3.5.3-18.
+
+## 2026-11-19, Codex — trace AMD RAPL in MangoHud
+
+Updated [the AMD CPU power plan](PLAN-AMD-CPU-POWER.md) from MangoHud v0.8.4 and upstream 199227b1 source. Recorded source selection, package scope, integer watts, counter wrap and read failures, plus a fractional-watts test case. Uncommitted documentation only. No live AMD hardware was available.
+
+## 2026-11-19, Codex — plan AMD CPU package power
+
+Added [the AMD CPU power plan](PLAN-AMD-CPU-POWER.md) after reviewing Linux powercap, MangoHud, the current sampler and its meter. The plan covers optional PL1, saved layouts, simulated AMD tests and later hardware validation. This uncommitted documentation change includes the plan and its index entry. Runtime checks are scheduled for implementation.
+
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — refresh the README
 
 Docs only, at the user's request.
@@ -13,6 +81,10 @@ Docs only, at the user's request.
 - Added a sentence that htop-gpu avoids asking network shares and FUSE mounts about open files.
 
 Facts checked against the meter code (the AMD video meter shows busy % plus vclk/dclk; the CPU power meter is Intel RAPL). Committed and pushed at the user's request; Codex's finding 42 records were left uncommitted.
+
+## 2026-11-19, Codex — verify findings 39–41 and 3.5.3-18
+
+The original reproductions passed, as did the build, style, 323 Intel checks and 198 AMD checks. All 17 patches reproduce the released source and the installed executable matches the package. Opened P3 finding 42 after reproducing false idle when a known client has generic-only fdinfo during a mount-table gap. The audit records are uncommitted. Installed version is 3.5.3-18.
 
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — push and install 3.5.3-18
 

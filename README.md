@@ -45,9 +45,9 @@ For the Intel iGPU:
 
 Usage, video and memory add up the programs htop can read, which in practice means your own. When it can't get a reading, the meter says N/A instead of guessing. The clock comes straight from the driver.
 
-For Intel CPUs:
+For Intel and AMD CPUs with readable Linux RAPL package counters:
 
-- Package power against the long term power limit (PL1), from RAPL
+- Package power in watts, with the long-term power limit (PL1) when the kernel reports one
 
 There are also two headings you can put above a group of meters: one with the card's name, and one with the CPU's name ("Intel Core Ultra 7 270K Plus" here), like the "Intel iGPU" one.
 
@@ -65,13 +65,15 @@ htop's own `GPU%` and `GPU_TIME` process columns can't use `xe`'s numbers (`xe` 
 
 To find out which programs are using the iGPU, htop-gpu looks at the files they have open. It's careful not to ask network shares or FUSE mounts about those files, so a hung NFS or SMB share shouldn't freeze it.
 
-The CPU power meter needs to read the RAPL energy counter, which Linux keeps root only by default. I made mine readable with this udev rule in `/etc/udev/rules.d/99-rapl-read.rules`:
+The CPU power meter uses the Linux powercap package energy counters, which can appear under `intel-rapl` on both Intel and AMD CPUs. AMD support has been checked with simulated counters. Without PL1, the meter shows watts in every mode. Bar fill and the percentage graph use PL1 when it is available.
+
+Linux restricts access to RAPL energy counters by default. I made mine readable with this udev rule in `/etc/udev/rules.d/99-rapl-read.rules`:
 
 ```
 SUBSYSTEM=="powercap", KERNEL=="intel-rapl:0", ACTION=="add", RUN+="/usr/bin/chmod 0444 /sys%p/energy_uj"
 ```
 
-It's locked down for a reason (the counter has been used for side channel attacks before), so decide for yourself whether that's okay on your machine. Without it the meter just says "no access".
+It's locked down for a reason (the counter has been used for side channel attacks before), so decide for yourself whether that's okay on your machine. The meter shows `no access` when Linux denies a counter read.
 
 ## Installing
 

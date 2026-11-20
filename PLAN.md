@@ -107,6 +107,10 @@ Further audit (2026-11-19) opened findings 39–41 for incomplete mount informat
 
 Xe and descriptor hardening (2026-11-19): findings 25–41 are committed as htop `1c205705` (patch 0017) and packaged as htop-gpu 3.5.3-18, installed and pushed on 2026-11-19.
 
+Independent verification (2026-11-19): the original 39–41 cases pass in 3.5.3-18. Package integrity and live Xe video display also passed. Finding 42 is open for generic-only fdinfo during a mount-table gap. See AUDIT.md.
+
+[AMD CPU package power](PLAN-AMD-CPU-POWER.md) is committed as htop `cf48f0a7` (patch 0018) and packaged as htop-gpu 3.5.3-19 (built, not yet installed), with the paused-meter fix for the GPU meters in `e33c31ec` (patch 0019). The original cases for findings 43–47 passed independent retesting. Follow-up findings 48–50 are fixed and verified. Simulated AMD meter checks and the live Intel MSR and MMIO checks passed. AMD hardware validation is pending. See [AUDIT.md](AUDIT.md).
+
 In progress: nobody.
 
 GitHub: https://github.com/orlfman/htop-gpu (this folder, public since 2026-11-19) and
@@ -173,7 +177,7 @@ Samsung GDDR6. Kernel 7.3.0-4-cachyos.
 | 6 | VRAM clock | `AMDGPUMemClock` | `VRAM clock: ` | hwmon `freq2_input` (mclk) + `mem_busy_percent` | `VRAM clock: 1258MHz 20.1Gbps busy:12%` | vs top level (1258 MHz), bar text `1258MHz 20.1Gbps` |
 | 7 | Video engine | `AMDGPUVideo` | `VCN` | `vcn_busy_percent` + `gpu_metrics` vclk/dclk | `VCN:100% vclk:2933MHz dclk:2200MHz` | 0–100%, bar text `100%` |
 | 8 | Fan | `AMDGPUFan` | `Fan` | hwmon `fan1_input` / `fan1_max` | `Fan:1193RPM max:3200RPM`, `Fan:0RPM (stopped)` | vs max, bar text `1193RPM` / `stopped` |
-| 9 | CPU power (Intel) | `IntelCPUPower` | `Pwr` | powercap `intel-rapl:N` package `energy_uj` deltas / long term limit | `Pwr:61.3W limit:250W` | vs PL1, bar text `61.3W/250W`; `no access` if root-only |
+| 9 | CPU package power (Intel and AMD) | `IntelCPUPower` | `Pwr` | powercap `intel-rapl:N` package `energy_uj` deltas and optional PL1 | `Pwr:61.3W limit:250W` or `Pwr:42.5W` | Fill and chart against PL1 when available. Watts without PL1. `no access` if denied. |
 | 10 | AMD GPU heading | `AMDGPUInfo` | card name (`AMD GPU` if none) | card table `name` | `Radeon RX 9070 XT`, `Radeon RX 9070 XT: sleep`, `AMD GPU: N/A` | text only |
 | 11 | CPU heading | `IntelCPUInfo` | CPU model name (`CPU` if none) | `/proc/cpuinfo` `model name`, read once, without `(R)` / `(TM)` / ` @ GHz` | `Intel Core Ultra 7 270K Plus` | text only |
 

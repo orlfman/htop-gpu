@@ -8,8 +8,8 @@ to know lives in this folder, never only in one agent's private memory.
 
 A personal custom build of htop 3.5.3 with header meters for AMD dedicated cards
 (RDNA 2, 3 and 4: RX 6000, 7000 and 9000; developed and tested on an RX 9070 XT,
-the others only against fake sysfs trees; htop `f842f486`, `7c2fe84b`, `943464c0`, `c3a0d73c`, `1c205705`;
-installed as 3.5.3-18):
+the others only against fake sysfs trees; htop `f842f486`, `7c2fe84b`, `943464c0`, `c3a0d73c`, `1c205705`, `cf48f0a7`, `e33c31ec`;
+installed as 3.5.3-18, packaged as 3.5.3-19):
 GPU usage, VRAM, power, edge/junction/memory temperatures, GPU clock, VRAM clock,
 video engine. Not meant for upstream htop, but kept as close to upstream as
 possible so new htop releases are easy to rebase onto.
@@ -37,6 +37,10 @@ AUDIT.md (findings 20-26).
 htop `1c205705` (patch 0017, installed as 3.5.3-18) adds the
 xe runtime-PM read spacing, the GPU% xe skip, and descriptor identification that
 never queries network or FUSE filesystems (AUDIT.md findings 25-41).
+htop `cf48f0a7` (patch 0018) adds AMD CPU package power and hardens RAPL
+sampling (MSR/MMIO grouping, counter identity; findings 43-50), and `e33c31ec`
+(patch 0019) keeps all header meters updating while paused through
+`linux/MeterClock.h`. Package 3.5.3-19 is built but not yet installed.
 
 ## Read first
 
@@ -103,6 +107,66 @@ Only one agent works on the project at a time.
 - Installed: `htop-gpu` (`/usr/bin/htop-gpu`, this project) next to the repo
   `htop` (`/usr/bin/htop`). Rebuilding or reinstalling htop-gpu, or changing the
   stock package, needs the user's OK.
+
+## Reference projects
+
+The user's only hardware is the Core Ultra 7 270K Plus (Arrow Lake iGPU) and
+the RX 9070 XT. Every other GPU, CPU and driver combination is only as right
+as our reading of how it behaves. Other monitoring tools have already been
+tried and fixed on far more hardware, so study them heavily. This is the
+user's standing instruction from 2026-11-19.
+
+Before adding a meter, changing how a value is read, or claiming support for
+hardware we can't test, look at how these projects get the same value. Use the
+upstream repositories below; GitHub mirrors and forks can be years out of date
+(an old personal `intel-gpu-tools` mirror on GitHub was last updated about 11
+years ago).
+
+- **MangoHud** (MIT, https://github.com/flightlessmango/MangoHud): AMD and
+  Intel GPU stats in its overlay, CPU power, and the live cross-check already
+  used for the Dune load test. Installed (`mangohud`).
+- **Mission Center** (GPL-3.0-or-later,
+  https://gitlab.com/mission-center-devs/mission-center): the Intel iGPU
+  baseline the user picked for usage, clock, memory and video. Installed
+  (`missioncenter`).
+- **nvtop** (GPL-3.0-or-later, https://github.com/Syllo/nvtop): per-process
+  fdinfo accounting for amdgpu, i915 and xe, engine classes and memory
+  regions. Installed (`nvtop`).
+- **amdgpu_top** (MIT, https://github.com/Umio-Yasuno/amdgpu_top): AMD only.
+  Which sensors and `gpu_metrics` fields exist on which generation, fdinfo,
+  and power and clock details. It is the main source for the RDNA 2/3 cards
+  we can't test. Installed (`amdgpu_top`).
+- **intel_gpu_top** and **gputop**, Intel's own tools in igt-gpu-tools (MIT,
+  https://gitlab.freedesktop.org/drm/igt-gpu-tools):
+  - `tools/intel_gpu_top.c` is **i915 only**: card-wide engine busyness from
+    the i915 perf PMU, which needs root or `CAP_PERFMON`, plus a per-client
+    view. Since March 2026 it explicitly rejects xe devices and points to
+    gputop.
+  - `tools/gputop.c` with `tools/gputop/xe_gputop.c` is the **xe** tool:
+    per-client engine activity.
+
+  Neither is installed. The AUR package `igt-gpu-tools` was at 1.30 on
+  2026-11-19, far behind upstream v2.6 (2026-09-28), so read the source at
+  a recent upstream tag rather than trusting the AUR build. Installing or
+  building it needs the user's OK.
+
+How to use them:
+
+- Read their source at a pinned tag or commit, and link it from PLAN.md or
+  AUDIT.md next to the decision it supports. Their handling of other
+  generations (per-chip tables, quirks, fixed bugs and issue reports) is our
+  best evidence for hardware we can't test.
+- Compare at least two of them where they cover the same value. When they
+  disagree with each other or with us, find out why before choosing. The
+  kernel source and `Documentation/gpu/drm-usage-stats.rst` break ties, since
+  these tools have bugs too.
+- Use the installed ones for live side-by-side checks on this machine, and
+  record their versions with the numbers.
+- Licensing: htop-gpu is GPL-2.0-or-later like htop. Never copy code from
+  Mission Center or nvtop, because GPL-3.0 code would make the patches
+  GPLv3. Study how they work and write our own. From the MIT projects, prefer
+  rewriting too. If a piece is adapted, keep its copyright and permission
+  notice and name the source in the commit message.
 
 ## Checks
 

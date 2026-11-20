@@ -1,0 +1,557 @@
+From cf48f0a7b73d96bc999a9590203c56e3ad5fbfc0 Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 19:40:55 -0700
+Subject: [PATCH 18/19] linux: support AMD CPU package power and harden RAPL
+ sampling
+
+The package power meter now accepts any readable RAPL package counter,
+including AMD's, and shows watts alone when no long-term limit (PL1)
+is reported; bar fill and graph use the limit when there is one. The
+Setup names are vendor-neutral.
+
+Packages are grouped by name across the intel-rapl (MSR) and
+intel-rapl-mmio interfaces and counted once, with MSR preferred and
+MMIO as the fallback for energy and for the limit. Each zone is read
+through one opened directory: its name is rechecked (a reused path
+triggers rediscovery), and its identity, counter and wrap range come
+from the same directory, so a replaced counter starts a new baseline
+instead of looking like a wrap.
+
+The meter takes its timestamp from linux/MeterClock.h: monotonicMs
+while it advances, and the clock once per header pass while the
+process list is paused (Z), so package watts keep updating.
+
+Co-Authored-By: OpenAI Codex (GPT-6.2 Astra) <noreply@openai.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Makefile.am            |   1 +
+ linux/IntelRAPL.c      | 248 +++++++++++++++++++++++++++++------------
+ linux/IntelRAPLMeter.c |  67 +++++++++--
+ linux/MeterClock.h     |  37 ++++++
+ 4 files changed, 270 insertions(+), 83 deletions(-)
+ create mode 100644 linux/MeterClock.h
+
+diff --git a/Makefile.am b/Makefile.am
+index 4402fa66..c5a2c1d8 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -202,6 +202,7 @@ linux_platform_headers = \
+ 	linux/IntelRAPLMeter.h \
+ 	linux/LibSensors.h \
+ 	linux/LinuxMachine.h \
++	linux/MeterClock.h \
+ 	linux/LinuxProcess.h \
+ 	linux/LinuxProcessTable.h \
+ 	linux/OpenRCMeter.h \
+diff --git a/linux/IntelRAPL.c b/linux/IntelRAPL.c
+index def18fcf..28437dcc 100644
+--- a/linux/IntelRAPL.c
++++ b/linux/IntelRAPL.c
+@@ -9,13 +9,17 @@ in the source distribution for its full text.
+ 
+ #include "linux/IntelRAPL.h"
+ 
++#include <ctype.h>
+ #include <dirent.h>
+ #include <errno.h>
++#include <fcntl.h>
+ #include <math.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <unistd.h>
++#include <sys/stat.h>
+ #include <sys/types.h>
+ 
+ #include "Macros.h"
+@@ -31,12 +35,19 @@ in the source distribution for its full text.
+ 
+ #define INTELRAPL_MAX_PACKAGES    8
+ #define INTELRAPL_MAX_CONSTRAINTS 4
++#define INTELRAPL_SOURCES         2
++
++/* Both interfaces can report the same package. The MSR one is preferred, MMIO is the fallback. */
++static const char* const IntelRAPL_prefixes[INTELRAPL_SOURCES] = { "intel-rapl:", "intel-rapl-mmio:" };
+ 
+ typedef struct IntelRAPLZone_ {
+-   char dir[1024];
++   char name[32];                     /* package-N, shared by both interfaces */
++   char dir[INTELRAPL_SOURCES][1024]; /* empty when that interface lacks the package */
++   int source;                        /* interface of the previous read, -1 before the first */
++   dev_t device;                      /* identity of that interface's zone directory */
++   ino_t inode;
+    double energy;      /* uJ at the previous read, NAN before the first */
+    double range;       /* uJ at which the counter wraps around to 0 */
+-   double limit;       /* W, long term limit */
+ } IntelRAPLZone;
+ 
+ static IntelRAPLZone zones[INTELRAPL_MAX_PACKAGES];
+@@ -46,13 +57,21 @@ static uint64_t lastMonotonicMs;
+ static uint64_t energyMonotonicMs;
+ static IntelRAPLSample sample;
+ 
+-/* Returns NAN if the file cannot be read or parsed; *error gets the errno of a failed read, else 0 */
+-static double IntelRAPL_readNumber(const char* dir, const char* file, int* error) {
+-   char path[2048];
+-   xSnprintf(path, sizeof(path), "%s/%s", dir, file);
++static ssize_t IntelRAPL_readFile(int fd, const char* file, char* buffer, size_t size) {
++#ifdef HAVE_OPENAT
++   return Compat_readfileat(fd, file, buffer, size);
++#else
++   /* Resolve relative to the open directory even without libc openat(). */
++   char dir[32];
++   xSnprintf(dir, sizeof(dir), "/proc/self/fd/%d", fd);
++   return Compat_readfileat(dir, file, buffer, size);
++#endif
++}
+ 
++/* Returns NAN if the file cannot be read or parsed. */
++static double IntelRAPL_readNumber(int fd, const char* file, int* error) {
+    char buffer[64];
+-   ssize_t r = Compat_readfile(path, buffer, sizeof(buffer));
++   ssize_t r = IntelRAPL_readFile(fd, file, buffer, sizeof(buffer));
+    if (error)
+       *error = r < 0 ? (int)(-r) : 0;
+    if (r <= 0)
+@@ -61,16 +80,18 @@ static double IntelRAPL_readNumber(const char* dir, const char* file, int* error
+    char* end;
+    errno = 0;
+    long long value = strtoll(buffer, &end, 10);
+-   if (errno || end == buffer)
++   if (errno || end == buffer || value < 0)
++      return NAN;
++   while (isspace((unsigned char)*end))
++      end++;
++   if (*end)
+       return NAN;
+ 
+    return (double)value;
+ }
+ 
+-static bool IntelRAPL_readText(const char* dir, const char* file, char* buffer, size_t size) {
+-   char path[2048];
+-   xSnprintf(path, sizeof(path), "%s/%s", dir, file);
+-   if (Compat_readfile(path, buffer, size) <= 0)
++static bool IntelRAPL_readText(int fd, const char* file, char* buffer, size_t size) {
++   if (IntelRAPL_readFile(fd, file, buffer, size) <= 0)
+       return false;
+ 
+    char* newline = strchr(buffer, '\n');
+@@ -88,8 +109,9 @@ static void IntelRAPL_forget(void) {
+    sample.powerLimit = NAN;
+ }
+ 
+-/* Package zones are intel-rapl:N, named package-M. Their subzones (intel-rapl:N:M) and the
+-   intel-rapl-mmio copies of the same counters are skipped, so nothing is counted twice. */
++/* Package zones are intel-rapl:N and intel-rapl-mmio:N, named package-M. A package can appear
++   in both, so zones are grouped by name and each package is counted once. Subzones
++   (intel-rapl:N:M) are skipped. */
+ static void IntelRAPL_findZones(void) {
+    IntelRAPL_forget();
+ 
+@@ -98,22 +120,42 @@ static void IntelRAPL_findZones(void) {
+       return;
+ 
+    const struct dirent* entry;
+-   while ((entry = readdir(dir)) && zoneCount < INTELRAPL_MAX_PACKAGES) {
++   while ((entry = readdir(dir))) {
+       const char* name = entry->d_name;
+-      if (!String_startsWith(name, "intel-rapl:") || strchr(name + strlen("intel-rapl:"), ':') || strlen(name) >= 64)
++      int source = -1;
++      for (int s = 0; s < INTELRAPL_SOURCES; s++) {
++         size_t length = strlen(IntelRAPL_prefixes[s]);
++         if (String_startsWith(name, IntelRAPL_prefixes[s]) && name[length] && !strchr(name + length, ':'))
++            source = s;
++      }
++      if (source < 0 || strlen(name) >= 64)
+          continue;
+ 
+-      IntelRAPLZone* zone = &zones[zoneCount];
+-      xSnprintf(zone->dir, sizeof(zone->dir), INTELRAPL_POWERCAP_DIR "/%s", name);
+-
++      char path[1024];
++      xSnprintf(path, sizeof(path), INTELRAPL_POWERCAP_DIR "/%s", name);
++      int fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
++      if (fd < 0)
++         continue;
+       char type[32];
+-      if (!IntelRAPL_readText(zone->dir, "name", type, sizeof(type)) || !String_startsWith(type, "package-"))
++      bool isPackage = IntelRAPL_readText(fd, "name", type, sizeof(type)) && String_startsWith(type, "package-");
++      close(fd);
++      if (!isPackage)
+          continue;
+ 
+-      zone->energy = NAN;
+-      zone->range = NAN;
+-      zone->limit = NAN;
+-      zoneCount++;
++      IntelRAPLZone* zone = NULL;
++      for (size_t i = 0; i < zoneCount && !zone; i++)
++         if (String_eq(zones[i].name, type))
++            zone = &zones[i];
++      if (!zone) {
++         if (zoneCount == INTELRAPL_MAX_PACKAGES)
++            continue;
++         zone = &zones[zoneCount++];
++         *zone = (IntelRAPLZone) {
++            .source = -1, .energy = NAN, .range = NAN,
++         };
++         xSnprintf(zone->name, sizeof(zone->name), "%s", type);
++      }
++      xSnprintf(zone->dir[source], sizeof(zone->dir[source]), "%s", path);
+    }
+    closedir(dir);
+ 
+@@ -122,79 +164,137 @@ static void IntelRAPL_findZones(void) {
+       sample.status = INTELRAPL_ACTIVE;
+ }
+ 
+-/* Cache the static counter range once readable; power limits can change between refreshes. */
+-static void IntelRAPL_readLimits(void) {
+-   double total = 0.0;
+-
+-   for (size_t i = 0; i < zoneCount; i++) {
+-      IntelRAPLZone* zone = &zones[i];
+-      if (isNaN(zone->range))
+-         zone->range = IntelRAPL_readNumber(zone->dir, "max_energy_range_uj", NULL);
+-      zone->limit = NAN;
+-
+-      for (unsigned int c = 0; c < INTELRAPL_MAX_CONSTRAINTS; c++) {
+-         char file[64];
+-         char name[32];
+-         xSnprintf(file, sizeof(file), "constraint_%u_name", c);
+-         if (!IntelRAPL_readText(zone->dir, file, name, sizeof(name)) || !String_eq(name, "long_term"))
+-            continue;
+-
+-         xSnprintf(file, sizeof(file), "constraint_%u_power_limit_uw", c);
+-         zone->limit = IntelRAPL_readNumber(zone->dir, file, NULL) / 1000000.0;
+-         break;
+-      }
++static double IntelRAPL_readLimit(int fd) {
++   for (unsigned int c = 0; c < INTELRAPL_MAX_CONSTRAINTS; c++) {
++      char file[64];
++      char name[32];
++      xSnprintf(file, sizeof(file), "constraint_%u_name", c);
++      if (!IntelRAPL_readText(fd, file, name, sizeof(name)) || !String_eq(name, "long_term"))
++         continue;
+ 
+-      total += zone->limit;
++      xSnprintf(file, sizeof(file), "constraint_%u_power_limit_uw", c);
++      return IntelRAPL_readNumber(fd, file, NULL) / 1000000.0;
+    }
+ 
+-   sample.powerLimit = total;
++   return NAN;
+ }
+ 
+-static void IntelRAPL_refresh(uint64_t monotonicMs) {
+-   /* looked for again until there, e.g. when intel_rapl_msr loads after htop started */
+-   if (!zoneCount) {
+-      IntelRAPL_findZones();
+-      if (!zoneCount)
+-         return;
+-   }
++typedef struct IntelRAPLReading_ {
++   double energy;
++   double limit;
++   bool denied;
++} IntelRAPLReading;
++
++/* Use one directory handle for the name, identity and counters. A reused path might
++   identify a different package, so ask the caller to rediscover the topology. */
++static bool IntelRAPL_readZone(IntelRAPLZone* zone, IntelRAPLReading* reading) {
++   for (int s = 0; s < INTELRAPL_SOURCES; s++) {
++      if (!zone->dir[s][0])
++         continue;
++      int fd = open(zone->dir[s], O_RDONLY | O_DIRECTORY | O_CLOEXEC);
++      if (fd < 0) {
++         reading->denied |= errno == EACCES || errno == EPERM;
++         continue;
++      }
+ 
+-   IntelRAPL_readLimits();
++      char name[32];
++      if (!IntelRAPL_readText(fd, "name", name, sizeof(name))) {
++         close(fd);
++         continue;
++      }
++      if (!String_eq(name, zone->name)) {
++         close(fd);
++         return false;
++      }
+ 
++      /* Prefer the MSR limit even when energy has to come from MMIO. */
++      if (!isPositive(reading->limit))
++         reading->limit = IntelRAPL_readLimit(fd);
++
++      struct stat st;
++      if (isNaN(reading->energy) && fstat(fd, &st) == 0) {
++         int error;
++         double energy = IntelRAPL_readNumber(fd, "energy_uj", &error);
++         if (!isNaN(energy)) {
++            if (s != zone->source || st.st_dev != zone->device || st.st_ino != zone->inode) {
++               zone->source = s;
++               zone->device = st.st_dev;
++               zone->inode = st.st_ino;
++               zone->energy = NAN;
++               zone->range = NAN;
++            }
++            if (!isPositive(zone->range))
++               zone->range = IntelRAPL_readNumber(fd, "max_energy_range_uj", NULL);
++            reading->energy = energy;
++         } else if (error == EACCES || error == EPERM) {
++            reading->denied = true;
++         }
++      }
++      close(fd);
++      if (!isNaN(reading->energy) && isPositive(reading->limit))
++         break;
++   }
++   return true;
++}
++
++static bool IntelRAPL_sampleZones(uint64_t monotonicMs) {
+    double elapsed = (double)(monotonicMs - energyMonotonicMs) / 1000.0;
+    double power = 0.0;
++   double limit = 0.0;
++   bool denied = false;
+    for (size_t i = 0; i < zoneCount; i++) {
+       IntelRAPLZone* zone = &zones[i];
+-      int error;
+-      double energy = IntelRAPL_readNumber(zone->dir, "energy_uj", &error);
+-
+-      if (isNaN(energy) && (error == EACCES || error == EPERM)) {
+-         /* root only unless made readable; the next readable counters start over */
+-         for (size_t j = 0; j < zoneCount; j++)
+-            zones[j].energy = NAN;
+-         sample.status = INTELRAPL_NO_ACCESS;
+-         sample.power = NAN;
+-         return;
+-      }
+-      if (isNaN(energy)) {
+-         /* gone or broken: forget the zones, the next refresh looks for them again */
+-         IntelRAPL_forget();
+-         return;
++      IntelRAPLReading reading = { .energy = NAN, .limit = NAN };
++      if (!IntelRAPL_readZone(zone, &reading))
++         return false;
++      limit += isPositive(reading.limit) ? reading.limit : NAN;
++      if (isNaN(reading.energy)) {
++         if (!reading.denied) {
++            IntelRAPL_forget();
++            return true;
++         }
++         denied = true;
++         continue;
+       }
+ 
+       /* the counter wraps around to 0 after max_energy_range_uj */
+       if (isNaN(zone->energy) || !(elapsed > 0.0))
+          power = NAN;
+-      else if (energy >= zone->energy)
+-         power += (energy - zone->energy) / 1000000.0 / elapsed;
++      else if (reading.energy >= zone->energy)
++         power += (reading.energy - zone->energy) / 1000000.0 / elapsed;
++      else if (isPositive(zone->range) && zone->range >= zone->energy)
++         power += (reading.energy + zone->range - zone->energy) / 1000000.0 / elapsed;
+       else
+-         power += (energy + zone->range - zone->energy) / 1000000.0 / elapsed;
++         power = NAN;
+ 
+-      zone->energy = energy;
++      zone->energy = reading.energy;
+    }
+ 
++   sample.powerLimit = limit;
++   if (denied) {
++      /* An aggregate needs a readable counter for every package. */
++      for (size_t i = 0; i < zoneCount; i++)
++         zones[i].energy = NAN;
++      sample.status = INTELRAPL_NO_ACCESS;
++      sample.power = NAN;
++      return true;
++   }
+    sample.status = INTELRAPL_ACTIVE;
+    sample.power = power;
+    energyMonotonicMs = monotonicMs;
++   return true;
++}
++
++static void IntelRAPL_refresh(uint64_t monotonicMs) {
++   if (!zoneCount)
++      IntelRAPL_findZones();
++   if (!zoneCount || IntelRAPL_sampleZones(monotonicMs))
++      return;
++
++   /* Discard partial totals and baselines before regrouping. Retry at most once. */
++   IntelRAPL_findZones();
++   if (zoneCount && !IntelRAPL_sampleZones(monotonicMs))
++      IntelRAPL_forget();
+ }
+ 
+ const IntelRAPLSample* IntelRAPL_getSample(uint64_t monotonicMs) {
+diff --git a/linux/IntelRAPLMeter.c b/linux/IntelRAPLMeter.c
+index 5f04d266..8240f155 100644
+--- a/linux/IntelRAPLMeter.c
++++ b/linux/IntelRAPLMeter.c
+@@ -21,10 +21,12 @@ in the source distribution for its full text.
+ #include "Meter.h"
+ #include "MeterMode.h"
+ #include "Object.h"
++#include "ProvideCurses.h"
+ #include "RichString.h"
+ #include "XUtils.h"
+ #include "linux/IntelRAPL.h"
+ #include "linux/LinuxMachine.h"
++#include "linux/MeterClock.h"
+ 
+ 
+ static const int IntelCPUInfoMeter_attributes[] = {
+@@ -35,23 +37,68 @@ static const int IntelCPUPowerMeter_attributes[] = {
+    BATTERY,
+ };
+ 
++static void IntelCPUPowerMeter_init(Meter* this) {
++   this->meterData = xCalloc(1, sizeof(Meter_Draw));
++}
++
++static void IntelCPUPowerMeter_done(Meter* this) {
++   free(this->meterData);
++}
++
++static void IntelCPUPowerMeter_drawWatts(Meter* this, int x, int y, int w) {
++   if (w <= 0)
++      return;
++
++   const char* caption = Meter_getCaption(this);
++   int captionWidth = (int)strnlen(caption, w);
++   attrset(CRT_colors[METER_TEXT]);
++   mvaddnstr(y, x, caption, captionWidth);
++   if (w > captionWidth) {
++      attrset(CRT_colors[METER_VALUE]);
++      mvaddnstr(y, x + captionWidth, ":", 1);
++      if (w > captionWidth + 1)
++         mvaddnstr(y, x + captionWidth + 1, this->txtBuffer, w - captionWidth - 1);
++   }
++   attrset(CRT_colors[RESET_COLOR]);
++}
++
+ static void IntelCPUPowerMeter_updateValues(Meter* this) {
+-   const IntelRAPLSample* sample = IntelRAPL_getSample(this->host->monotonicMs);
+-   if (sample->status != INTELRAPL_ACTIVE || !isNonnegative(sample->power) || !isPositive(sample->powerLimit)) {
++   const IntelRAPLSample* sample = IntelRAPL_getSample(MeterClock_now(this->host));
++   bool havePower = sample->status == INTELRAPL_ACTIVE && isNonnegative(sample->power);
++   this->total = isPositive(sample->powerLimit) ? sample->powerLimit : 0.0;
++   if (this->mode == GRAPH_METERMODE) {
++      Meter_Draw* graphDraw = this->meterData;
++      bool showGraph = havePower && isPositive(this->total);
++      if (!showGraph && this->draw != IntelCPUPowerMeter_drawWatts) {
++         /* Keep the graph's height and selection. Start fresh if a limit returns. */
++         *graphDraw = this->draw;
++         this->draw = IntelCPUPowerMeter_drawWatts;
++         free(this->drawData.values);
++         this->drawData = (GraphData) {
++            0
++         };
++      } else if (showGraph && this->draw == IntelCPUPowerMeter_drawWatts) {
++         this->draw = *graphDraw;
++      }
++   }
++
++   if (!havePower) {
+       this->values[0] = NAN;
+       xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%s", sample->status == INTELRAPL_NO_ACCESS ? "no access" : "N/A");
+       return;
+    }
+ 
+    this->values[0] = sample->power;
+-   this->total = sample->powerLimit;
+-   xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%.1fW/%.0fW", this->values[0], this->total);
++   if (this->total > 0.0)
++      xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%.1fW/%.0fW", this->values[0], this->total);
++   else
++      xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%.1fW", this->values[0]);
+ }
+ 
+ static void IntelCPUPowerMeter_display(const Object* cast, RichString* out) {
+    const Meter* this = (const Meter*)cast;
+    RichString_writeAscii(out, CRT_colors[METER_TEXT], ":");
+-   if (!isNonnegative(this->values[0])) {
++   if (!isNonnegative(this->values[0]) || !isPositive(this->total)) {
+       RichString_appendAscii(out, CRT_colors[METER_VALUE], this->txtBuffer);
+       return;
+    }
+@@ -138,7 +185,7 @@ const MeterClass IntelCPUInfoMeter_class = {
+    .total = 0.0,
+    .attributes = IntelCPUInfoMeter_attributes,
+    .name = "IntelCPUInfo",
+-   .uiName = "Intel CPU heading",
++   .uiName = "CPU heading",
+    .caption = "CPU",
+    .description = "CPU model name, as a heading above the CPU meters"
+ };
+@@ -149,15 +196,17 @@ const MeterClass IntelCPUPowerMeter_class = {
+       .delete = Meter_delete,
+       .display = IntelCPUPowerMeter_display,
+    },
++   .init = IntelCPUPowerMeter_init,
++   .done = IntelCPUPowerMeter_done,
+    .updateValues = IntelCPUPowerMeter_updateValues,
+    .defaultMode = BAR_METERMODE,
+    .supportedModes = METERMODE_DEFAULT_SUPPORTED,
+    .maxItems = 1,
+    .isPercentChart = true,
+-   .total = 100.0,
++   .total = 0.0,
+    .attributes = IntelCPUPowerMeter_attributes,
+    .name = "IntelCPUPower",
+-   .uiName = "Intel CPU power",
++   .uiName = "CPU package power",
+    .caption = "Pwr",
+-   .description = "Intel CPU package power (RAPL) / long term power limit"
++   .description = "CPU package power (RAPL). Bar fill and graph use the reported long-term limit."
+ };
+diff --git a/linux/MeterClock.h b/linux/MeterClock.h
+new file mode 100644
+index 00000000..5f18c3ae
+--- /dev/null
++++ b/linux/MeterClock.h
+@@ -0,0 +1,37 @@
++#ifndef HEADER_MeterClock
++#define HEADER_MeterClock
++/*
++htop - linux/MeterClock.h
++(C) 2026 orlfman
++Released under the GNU GPLv2+, see the COPYING file
++in the source distribution for its full text.
++*/
++
++#include <stdint.h>
++
++#include "Machine.h"
++#include "linux/Platform.h"
++
++
++/* The timestamp a header meter hands its sampler. htop stops advancing monotonicMs while the
++   process list is paused (Z) but keeps updating the header, so during a pause the clock is read
++   once per header pass instead. Otherwise it is monotonicMs itself, which keeps caches keyed to
++   it, like the Intel mount table shared with the GPU% column, to one per refresh. Each file that
++   includes this keeps its own state; the clock and the values are the same. */
++static inline uint64_t MeterClock_now(const Machine* host) {
++   static uint64_t pass = UINT64_MAX;
++   static uint64_t lastMonotonicMs;
++   static uint64_t now;
++   if (host->realtimeMs != pass) {
++      pass = host->realtimeMs;
++      if (host->monotonicMs != lastMonotonicMs) {
++         lastMonotonicMs = host->monotonicMs;
++         now = host->monotonicMs;
++      } else {
++         Platform_gettime_monotonic(&now);
++      }
++   }
++   return now;
++}
++
++#endif /* HEADER_MeterClock */

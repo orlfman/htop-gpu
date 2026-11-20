@@ -1,7 +1,7 @@
 From 44265679fc5a0fde90bc6fcec4119edf277dc28d Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 21:54:35 -0700
-Subject: [PATCH 11/17] linux: add AMD GPU heading meter
+Subject: [PATCH 11/19] linux: add AMD GPU heading meter
 
 Add AMDGPUInfo, a text-only heading for the AMD GPU meters, like the
 Intel iGPU one. Its caption is the card's name from the card table
