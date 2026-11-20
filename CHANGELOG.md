@@ -3,6 +3,35 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-11-19, Claude Code (Claude Opus 5.5) — commit and package 3.5.3-20
+
+At the user's request; not pushed, not installed.
+
+- htop `amdgpu-meters`: `5cf3324f` "linux: keep heading captions from sampling on every redraw" (finding 51: `AMDGPU_lastSample()`, `IntelGPU_lastSample()`, the AMD caption), then `342dcaf9` "linux: show the Intel iGPU model in its heading" (Codex's pci.ids lookup, using `IntelGPU_lastSample()`). The first commit's `IntelGPU.c` and `IntelGPU.h` were staged as the committed files plus only the accessor, and that state was syntax-checked with `-Werror`. The second commit's `IntelGPU.c` diff contains no accessor lines.
+- `pkgrel=20`; the patches were re-exported (new 0020 and 0021; 0001–0019 changed only in their numbering). Applying all 21 to a fresh `git archive 3.5.3` reproduces the whole `amdgpu-meters` tree with no rejects, and all 21 checksums match.
+- `makepkg -fC` built `htop-gpu-3.5.3-20-x86_64.pkg.tar.zst`. namcap shows the same three messages as before. The packaged binary reports `3.5.3-20-gpu`, and a capture with a copy of the user's config showed `Arrow Lake-S [Intel Graphics]: sleep`, the CPU and Radeon headings and `Pwr` at 9.1W/250W.
+- Docs: Codex's "development heading/build" wording in the README, AGENTS.md and PLAN-INTEL-IGPU.md now refers to the release; AUDIT.md lines for findings 51–52 and the PLAN.md status point at the commits. The project commit also carries Codex's heading docs and tests and the finding 52 test fix.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — fix finding 52
+
+Test-only fix. `redraw_test()` in test-headings.py now requires a clean exit (status 0) and initializes its wait state before the `try`. It also guards the Intel sampler: the fake iGPU's PCI `vendor` file becomes a FIFO alongside the AMD busy counter, so key-press redraws must not resample either GPU. It passes, and fails when the Intel caption samples again. Headings: 41 checks pass. Uncommitted.
+
+## 2026-11-19, Codex — independently audit the GPU heading redraw fix
+
+Verified finding 51 live on xe. The installed viewer opened the Radeon busy counter during scrolling. The development viewer added zero Radeon sensor, Intel PCI metadata or fdinfo reads across 15 cursor-down presses while xe was active. Build, style and all 562 heading and GPU checks passed.
+
+Opened P3 finding 52 in [AUDIT.md](AUDIT.md). The redraw regression reported success for a disposable viewer that returned exit code 77. Audit only. The development changes are uncommitted, and the installed version is 3.5.3-19.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — audit the iGPU model heading, fix finding 51
+
+Codex's pci.ids model heading is correct. Opened and fixed P3 finding 51, which comes from my own `MeterClock` change in 3.5.3-19: heading captions are drawn on every redraw and called the samplers, so every key press between refreshes resampled the card. With strace, 15 key presses meant 45 AMD sysfs reads on 3.5.3-19, plus 663 fdinfo directory scans with the new Intel caption. New `AMDGPU_lastSample()` and `IntelGPU_lastSample()` let captions reuse the last refresh; the count is now 0 extra. New FIFO-based `redraw_test()` in test-headings.py fails with the old caption. Build and style clean; headings 41, AMD 198 and Intel 323 checks pass. Uncommitted with Codex's heading change.
+
+## 2026-11-19, Codex — show the Intel iGPU model in the heading
+
+Uses the selected iGPU's PCI device ID to look up its model in the local PCI database. Falls back to `Intel iGPU` and retains the status suffixes. On this machine the development build shows `Arrow Lake-S [Intel Graphics]`. Build and style passed, along with 39 heading, 323 Intel GPU and 198 AMD GPU checks. See [AUDIT.md](AUDIT.md).
+
+Source and tests are uncommitted. The installed package is 3.5.3-19.
+
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — push and install 3.5.3-19
 
 At the user's request.

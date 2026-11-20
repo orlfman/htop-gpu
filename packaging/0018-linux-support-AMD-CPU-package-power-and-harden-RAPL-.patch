@@ -1,7 +1,7 @@
 From cf48f0a7b73d96bc999a9590203c56e3ad5fbfc0 Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Thu, 19 Nov 2026 19:40:55 -0700
-Subject: [PATCH 18/19] linux: support AMD CPU package power and harden RAPL
+Subject: [PATCH 18/21] linux: support AMD CPU package power and harden RAPL
  sampling
 
 The package power meter now accepts any readable RAPL package counter,

@@ -1,6 +1,6 @@
 # htop-gpu audit findings
 
-Original audit: 2026-10-28 (America/Phoenix). Latest full project audit: 2026-11-11 (Codex). Latest audit: 2026-11-19 (Codex, CPU package power findings 48–50 fixed and verified).
+Original audit: 2026-10-28 (America/Phoenix). Latest full project audit: 2026-11-11 (Codex). Latest audit: 2026-11-19 (Claude Code, finding 52 fixed and verified).
 Auditors: Codex and Claude Code. Newest sections are at the top; the 2026-10-28 audit and older follow-ups start at "Scope and baseline".
 Status: findings 1-6 are resolved and validated; finding 6 is committed (`6c06d243`) and retained in installed `htop-gpu 3.5.3-12`, which labels CPU power Pwr. Finding 7 (P3) is deferred at the user's request. Finding 8 (P2, Intel client access loss reported as zero) is fixed and validated in 3.5.3-12; see the fix validation below.
 Findings 9-13 (P3, heading meters, Claude Code self-audit 2026-10-29): 9, 10, 11 and 13 are fixed (htop `44265679`, `798d8cfa`; installed in 3.5.3-13), 12 is accepted; see the last two sections.
@@ -19,7 +19,71 @@ Findings 33–34 (alternate DRM node paths and optional syscall support) are fix
 The original 33–34 reproductions also pass independently. Findings 35–38 from the follow-up audit are fixed and verified in htop `1c205705` (installed in 3.5.3-18, Claude Code).
 Independent retesting confirmed fixes 35–38. Findings 39–41 are fixed and verified in htop `1c205705` (installed in 3.5.3-18, Claude Code).
 Independent retesting confirmed the original cases for findings 39–41 in 3.5.3-18. Finding 42 is open. Findings 43–47 (CPU package power; Claude Code) and 48–50 (Codex) are fixed and verified in htop `cf48f0a7`, and the GPU meters' pause fix in `e33c31ec` (installed in 3.5.3-19 on 2026-11-19).
+Finding 51 (P3, heading captions sampled the GPU on every redraw because of the shared meter clock in `e33c31ec`) is fixed and verified in htop `5cf3324f` (packaged as 3.5.3-20, Claude Code).
+Finding 52 (P3, the redraw regression test accepts an unsuccessful process exit) is open.
+Finding 52 (P3, the redraw regression accepted an unsuccessful exit and covered Radeon only) is fixed and verified in this repo's `tools/test-headings.py` (3.5.3-20, Claude Code).
 P2 means normal priority; P3 means low priority.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — fix for finding 52
+
+Verified against `tools/test-headings.py`: `redraw_test()` only checked that `waitpid()` reaped htop and ignored the exit status. `exited` was also first assigned inside the `try`, so an exception before it would have made the `finally` raise `NameError`. Codex's Intel suggestion is sound: every Intel sample starts with `IntelGPU_findDevice()` reading the device's `vendor` file, even while the iGPU sleeps.
+
+Fix: `redraw_test(binary, sysfs, intel, tmp)` now:
+
+- shows `AMDGPUInfo`, `AMDGPUUsage` and `IntelGPUInfo` together, and requires both headings after the first refresh;
+- after that refresh, replaces both the fake card's `gpu_busy_percent` and the fake iGPU's PCI `vendor` file with FIFOs, presses ten cursor-down keys and `q`;
+- requires htop to be reaped within 3 s with exit status 0;
+- initializes `exited` and `status` before the `try`;
+- restores both fake devices afterwards (`fake_card(sysfs)` and `intel.reset()`), so the following Intel heading test starts clean.
+
+Checks:
+
+- `test-headings.py`: 41 ok, ALL PASSED. Proof run with `IntelGPUInfoMeter_getCaption()` temporarily calling the sampler again: htop blocked on the `vendor` FIFO and the check failed with `exited=False status=None`. The file was restored, its hash checked, and htop rebuilt. The AMD half was proven the same way for finding 51.
+- The exit-status check was verified by reading the code; I did not reproduce Codex's exit-77 stand-in program.
+
+Finding 52 is resolved. Uncommitted, with Codex's heading change and the finding 51 fix.
+
+## 2026-11-19, Codex — independent audit of the GPU heading redraw fix
+
+Audited Claude's uncommitted changes over htop `e33c31ec` and project `b7272d8`. Confirmed finding 51's production fix. Both caption callbacks now read only the last GPU sample. The regular refresh and the Setup path that adds a meter still call `updateValues()` before drawing.
+
+- A live 10 s refresh layout used both headings. With 15 cursor-down key presses, installed 3.5.3-19 opened the Radeon busy counter 15 extra times. The development build opened it zero extra times and showed the Intel model with its sleep suffix.
+- Repeated with xe active during a VA-API encode. The initial refresh did 1 Radeon busy-counter open, 1 Intel PCI vendor read, and 587 fdinfo directory opens. The following 15 key presses caused zero additional opens of all three kinds. Both viewers exited successfully. The traces cover this desktop on xe.
+- Build and style passed. All 41 heading, 198 AMD GPU and 323 Intel GPU checks passed. The Intel suite included the live workloads and mutations. Both git diffs passed the whitespace check.
+
+### 52 (P3) — the redraw regression accepts an unsuccessful exit
+
+`tools/test-headings.py:221` stores whether `waitpid()` reaped the process and ignores its exit status. A disposable PTY program printed the expected Radeon heading, waited for the test's `q`, and exited with status 77. Both assertions passed with no failures recorded. A nonzero exit during the redraw can therefore satisfy the success check if it reaches the same wait path. Require a clean exit and initialize the wait state before the cleanup block. The automated FIFO test currently exercises Radeon only. An Intel case can guard a PCI metadata file before scrolling to catch sampler reads even when the iGPU is asleep.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — audit of the Intel iGPU model heading
+
+Audited Codex's uncommitted change over htop `e33c31ec`: `IntelGPU_lookupModel()` and `IntelGPU_readModel()` read the selected iGPU's model from pci.ids (hwdata, misc, or `/usr/share/pci.ids`; `INTELGPU_PCI_IDS_FILE` for tests); `IntelGPUSample.model`; `IntelGPUInfoMeter_getCaption()`; and the headings tests. The pci.ids parsing is correct: the `8086 ` vendor line, then one-tab `xxxx  name` device lines, stopping at the next vendor and skipping subsystem lines and comments. It runs only when the device changes, and the model is carried across refreshes and kept through sleep. Live, it shows `Arrow Lake-S [Intel Graphics]`.
+
+### 51 (P3) — heading captions sampled the GPU on every redraw
+
+htop calls `getCaption()` from the draw path, which also runs between refreshes (key presses, scrolling). `AMDGPUInfoMeter_getCaption()` already called the sampler, and the new `IntelGPUInfoMeter_getCaption()` did too. That was harmless while samples were keyed to `monotonicMs`. But `MeterClock_now()` (my `e33c31ec`, installed in 3.5.3-19) cannot tell such a redraw from a pause, so it handed out a fresh timestamp and each redraw resampled. I measured opens with strace on a dev htop with `delay=100`, during one interval after the first refresh: 15 cursor-down presses caused 45 `gpu_busy_percent` opens on installed 3.5.3-19 (0 without key presses). Codex's tree added 663 `/proc/*/fdinfo` directory opens on top, a full iGPU client scan per redraw. The redraw-time samples also shortened the following rate interval.
+
+Fix: `AMDGPU_lastSample()` and `IntelGPU_lastSample()` return the cached sample without reading anything, and both heading captions use them. Only `updateValues()` (a refresh, or a Setup panel update) advances `MeterClock`. After the fix: 0 extra opens with 15 key presses, and both headings still show (Arrow Lake model, Radeon).
+
+Regression test in `tools/test-headings.py`, `redraw_test()`: on the fake-AMD full htop with `delay=100`, after the first refresh, `gpu_busy_percent` is replaced with a FIFO; ten cursor-down presses follow, then `q`. htop must exit within 3 s. With the old caption temporarily restored, htop blocked on the FIFO and the check failed; the file was restored and its hash checked.
+
+Checks:
+
+- Build: no warnings. STYLE OK, `test-check-style.sh` ALL PASSED, `git diff --check` clean in both repos.
+- `test-headings.py`: 41 ok, including Codex's Intel model heading cases and the new redraw test.
+- `test-sampler.py`: 198 ok. `test-intel-gpu.py --mutations`: 323 ok (live on xe).
+
+Other notes on Codex's change, not defects: the model is looked up only when the device identity changes, so a pci.ids installed after htop starts is picked up on the next restart. The heading shows pci.ids' wording as is (`Arrow Lake-S [Intel Graphics]`).
+
+Limits: the redraw cost was measured on this desktop only. Uncommitted, together with Codex's heading change.
+
+## 2026-11-19, Codex — Intel iGPU model heading validation
+
+Development source based on htop `e33c31ec`, with project files based on `b7272d8`. The heading looks up the selected iGPU's device ID in the Intel vendor section of the local `pci.ids` database. The name is cached while the selected device stays the same. `Intel iGPU` is the fallback, and the status suffix remains visible. No new findings in this validation.
+
+- The heading suite passed 39 checks under ASan and UBSan. One running htop showed Tiger Lake on simulated i915, retained its name while suspended, fell back after unbind, then showed Arrow Lake on simulated xe. It discarded that model after a PCI ID change at the same path. An unknown ID, another vendor's device, a subsystem record and a missing database did not supply a model.
+- Live on the 270K Plus with xe, the development binary displayed `Arrow Lake-S [Intel Graphics]` and `Arrow Lake-S [Intel Graphics]: sleep`. `lspci` 3.15.0 and udev reported the same model. nvtop 3.4.0 displayed it with parentheses. The installed 3.5.3-19 binary displayed its existing generic heading in the same disposable layout.
+- Build and style passed. Intel GPU tests passed all 323 checks with live workloads and mutations. The AMD GPU sampler passed all 198 checks. Live iGPU heading validation used xe on Arrow Lake. Other devices and i915 heading changes were tested with fixtures.
 
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — audit of Codex's fixes for findings 48–50
 

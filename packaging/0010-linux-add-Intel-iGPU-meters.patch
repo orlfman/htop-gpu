@@ -1,7 +1,7 @@
 From bb4f73317f0731df0699f7cecface2501c35645d Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 16:25:06 -0700
-Subject: [PATCH 10/19] linux: add Intel iGPU meters
+Subject: [PATCH 10/21] linux: add Intel iGPU meters
 
 Add meters for the Arrow Lake iGPU (i915, 8086:7d67): a heading
 ("Intel iGPU", with sleep and access states), render + compute

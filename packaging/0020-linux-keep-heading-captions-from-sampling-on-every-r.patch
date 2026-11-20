@@ -1,0 +1,94 @@
+From 5cf3324f05a8f990070d2e60d468699becb9d0df Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 20:23:29 -0700
+Subject: [PATCH 20/21] linux: keep heading captions from sampling on every
+ redraw
+
+htop draws captions on every redraw, also between refreshes (key
+presses, scrolling). The AMD heading caption called the sampler, and
+with MeterClock a redraw between refreshes looks like a pause, so each
+key press resampled the card and shortened the next rate interval.
+
+Add AMDGPU_lastSample() and IntelGPU_lastSample(), which return the
+sample taken by the last refresh without reading anything, and use the
+former for the AMD heading caption. Only updateValues() samples now.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ linux/AMDGPU.c      | 4 ++++
+ linux/AMDGPU.h      | 3 +++
+ linux/AMDGPUMeter.c | 4 +++-
+ linux/IntelGPU.c    | 4 ++++
+ linux/IntelGPU.h    | 3 +++
+ 5 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/linux/AMDGPU.c b/linux/AMDGPU.c
+index b4474b84..a6f7e78f 100644
+--- a/linux/AMDGPU.c
++++ b/linux/AMDGPU.c
+@@ -527,6 +527,10 @@ static void AMDGPU_refresh(void) {
+    AMDGPU_readMetrics(vcnFromMetrics);
+ }
+ 
++const AMDGPUSample* AMDGPU_lastSample(void) {
++   return &sample;
++}
++
+ const AMDGPUSample* AMDGPU_getSample(uint64_t monotonicMs) {
+    if (initialized && monotonicMs <= lastMonotonicMs)
+       return &sample;
+diff --git a/linux/AMDGPU.h b/linux/AMDGPU.h
+index 49d7d50e..8f2ec3e2 100644
+--- a/linux/AMDGPU.h
++++ b/linux/AMDGPU.h
+@@ -65,4 +65,7 @@ typedef struct AMDGPUSample_ {
+ /* Sysfs is read at most once per monotonicMs value, so all AMDGPU meters share one read per refresh */
+ const AMDGPUSample* AMDGPU_getSample(uint64_t monotonicMs);
+ 
++/* The last sample, without reading anything; for draw-time callers such as captions */
++const AMDGPUSample* AMDGPU_lastSample(void);
++
+ #endif /* HEADER_AMDGPU */
+diff --git a/linux/AMDGPUMeter.c b/linux/AMDGPUMeter.c
+index cdc916e7..03e02726 100644
+--- a/linux/AMDGPUMeter.c
++++ b/linux/AMDGPUMeter.c
+@@ -114,8 +114,10 @@ static void AMDGPUInfoMeter_updateValues(Meter* this) {
+    xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), ": %s", sample->status == AMDGPU_SUSPENDED ? "sleep" : "N/A");
+ }
+ 
++/* Captions are drawn on every redraw, also between refreshes. Reading here would sample the card
++   on every key press, so use the sample taken by the last refresh. */
+ static const char* AMDGPUInfoMeter_getCaption(const Meter* this) {
+-   const AMDGPUSample* sample = AMDGPUMeter_getSample(this);
++   const AMDGPUSample* sample = AMDGPU_lastSample();
+    return sample->card ? sample->card->name : this->caption;
+ }
+ 
+diff --git a/linux/IntelGPU.c b/linux/IntelGPU.c
+index 87b74fb6..bafcfd22 100644
+--- a/linux/IntelGPU.c
++++ b/linux/IntelGPU.c
+@@ -1219,6 +1219,10 @@ static void IntelGPU_refresh(uint64_t monotonicMs) {
+       lastXeReadMs = IntelGPU_nowMs();
+ }
+ 
++const IntelGPUSample* IntelGPU_lastSample(void) {
++   return &sample;
++}
++
+ const IntelGPUSample* IntelGPU_getSample(uint64_t monotonicMs) {
+    if (initialized && monotonicMs <= lastMonotonicMs)
+       return &sample;
+diff --git a/linux/IntelGPU.h b/linux/IntelGPU.h
+index 13624e36..5fefba9f 100644
+--- a/linux/IntelGPU.h
++++ b/linux/IntelGPU.h
+@@ -48,4 +48,7 @@ bool IntelGPU_isXeFd(uint64_t monotonicMs, openat_arg_t procFd, const char* fd);
+ /* All Intel meters share one sample per newer monotonicMs; deltas need a baseline. */
+ const IntelGPUSample* IntelGPU_getSample(uint64_t monotonicMs);
+ 
++/* The last sample, without reading anything; for draw-time callers such as captions */
++const IntelGPUSample* IntelGPU_lastSample(void);
++
+ #endif /* HEADER_IntelGPU */

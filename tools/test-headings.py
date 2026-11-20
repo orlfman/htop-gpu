@@ -1,22 +1,25 @@
 #!/usr/bin/env python3
-"""Tests for the heading meters: IntelCPUInfo (linux/IntelRAPLMeter.c) and AMDGPUInfo (linux/AMDGPUMeter.c).
+"""Tests for the CPU, Radeon, and Intel iGPU heading meters.
 
-Runs the real dev htop in a pty (htop-capture.py) with only the two headings in the header.
+Runs the real dev htop in a pty (htop-capture.py) with disposable configs.
 1. CPU name: a fake cpuinfo per case ((R)/(TM) in any case, " @ GHz", spacing, length, missing)
 2. AMD heading: the fake card (fake-sysfs.py) changes state under ONE running htop
 3. pause: the AMD GPU usage meter keeps following the fake card while the process list is
    paused (Z), as the header does (linux/MeterClock.h, shared by the GPU and CPU power meters)
-4. live: the normal dev binary shows this machine's CPU and card names
+4. Intel heading: fake PCI names and devices change under one running htop.
+5. live: the normal dev binary shows this machine's CPU and card names
 
-The heading sources (and linux/AMDGPU.c) are rebuilt with a fake cpuinfo / sysfs root and
+The heading and sampler sources are rebuilt with fake cpuinfo, sysfs and PCI IDs and
 ASan + UBSan, then rebuilt normally. Needs src/htop configured (./configure) and the 9070 XT
 (fake-sysfs.py copies its files). Run: python3 -I test-headings.py
 """
-import os, re, runpy, shutil, subprocess, sys, tempfile, time
+import os, re, runpy, shutil, signal, subprocess, sys, tempfile, time
+from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.normpath(os.path.join(HERE, "..", "src", "htop"))
-SOURCES = ["linux/AMDGPU.c", "linux/AMDGPUMeter.c", "linux/IntelRAPLMeter.c", "linux/IntelGPUMeter.c"]
+SOURCES = ["linux/AMDGPU.c", "linux/AMDGPUMeter.c", "linux/IntelRAPLMeter.c",
+           "linux/IntelGPU.c", "linux/IntelGPUMeter.c"]
 SANITIZE = "-fsanitize=address,undefined -fno-omit-frame-pointer"
 CARD = "Radeon RX 9070 XT"
 failures = []
@@ -37,12 +40,16 @@ def touch_sources():
         os.utime(os.path.join(SRC, f))
 
 
-def build(out, cpuinfo, sysfs):
+def build(out, cpuinfo, sysfs, intel, ids):
     # everything else up to date first, so the fake paths and sanitizers only reach SOURCES
     make()
     try:
         touch_sources()
-        make(f'CPPFLAGS=-DPROCCPUINFOFILE=\\"{cpuinfo}\\" -DAMDGPU_SYSFS_ROOT=\\"{sysfs}\\"',
+        flags = f'CPPFLAGS=-DPROCCPUINFOFILE=\\"{cpuinfo}\\" -DAMDGPU_SYSFS_ROOT=\\"{sysfs}\\"'
+        for name, path in (("INTELGPU_SYSFS_ROOT", intel.sys), ("INTELGPU_PROC_ROOT", intel.proc),
+                           ("INTELGPU_PCI_IDS_FILE", ids)):
+            flags += rf' -D{name}=\"{path}\"'
+        make(flags,
              f"CFLAGS=-g -O1 {SANITIZE}", f"LDFLAGS={SANITIZE}")
         shutil.copy(os.path.join(SRC, "htop"), out)
     finally:
@@ -149,6 +156,92 @@ def pause_test(binary, sysfs, tmp):
     fake_card(sysfs)
 
 
+def intel_heading_test(binary, tree, ids, tmp):
+    print("[Intel iGPU heading: PCI model, power state and device changes]")
+    HtopSession = runpy.run_path(f"{HERE}/test-rapl.py")["HtopSession"]
+    rc = f"{tmp}/intel-heading.htoprc"
+    write(rc, "config_reader_min_version=3\nheader_layout=one_100\nheader_margin=0\ndelay=2\n"
+              "column_meters_0=IntelGPUInfo\ncolumn_meter_modes_0=2\n")
+    tiger = "TigerLake-LP GT2 [Iris Xe Graphics]"
+    arrow = "Arrow Lake-S [Intel Graphics]"
+    write(ids, "1234  Another Vendor\n\t7d67  Another Vendor GPU\n\t64a0  Wrong Vendor GPU\n"
+               f"8086  Intel Corporation\n\t9a49  {tiger}\n"
+               "\t\t64a0 0000  Wrong Subsystem\n# Comment inside Intel section\n"
+               f"\t7D67  {arrow}  \n"
+               "8087  Another Vendor\n\t64a0  Wrong Vendor GPU\n")
+    tree.device("0x9a49")
+    session = HtopSession(binary, rc, 200, dict(os.environ))
+    try:
+        def expect(text):
+            ok, rows = session.until(lambda screen: screen and screen[0] == text)
+            check(f"Intel heading shows {text!r}", ok, repr(rows[:3]))
+
+        expect(tiger)
+        tree.write(tree.dev / "power/runtime_status", "suspended")
+        expect(f"{tiger}: sleep")
+        (tree.sys / "bus/pci/drivers/i915" / tree.dev.name).unlink()
+        expect("Intel iGPU: N/A")
+        tree.device("0x7d67", "xe")
+        expect(arrow)
+        # Keep the same PCI address and DRM directory while changing the device ID.
+        tree.write(tree.dev / "device", "0x64a0")
+        expect("Intel iGPU")
+        os.unlink(ids)
+        tree.write(tree.dev / "device", "0x7d67")
+        tree.write(tree.dev / "power/runtime_status", "suspended")
+        expect("Intel iGPU: sleep")
+    finally:
+        status = session.close()
+    check("Intel heading test htop exits cleanly", status == 0, f"exit {status}")
+
+
+def redraw_test(binary, sysfs, intel, tmp):
+    """Captions are drawn on every redraw. Between refreshes they must not sample either GPU."""
+    print("[key presses between refreshes do not sample the GPUs]")
+    HtopSession = runpy.run_path(f"{HERE}/test-rapl.py")["HtopSession"]
+    rc = f"{tmp}/redraw.htoprc"
+    write(rc, "config_reader_min_version=3\nheader_layout=one_100\ndelay=100\n"
+              "column_meters_0=AMDGPUInfo AMDGPUUsage IntelGPUInfo\ncolumn_meter_modes_0=2 1 2\n")
+    fake_card(sysfs)
+    intel.reset()
+    intel.device("0x7d67")
+    busy = next(Path(sysfs).rglob("gpu_busy_percent"))
+    vendor = intel.dev / "vendor"
+    exited, status = False, None
+    session = HtopSession(binary, rc, 200, dict(os.environ))
+    try:
+        ok, rows = session.until(lambda s: any(row.startswith(CARD) for row in s) and
+                                 any(row.startswith("Intel iGPU") for row in s))
+        check("first refresh shows both GPU headings", ok, repr(rows[:4]))
+        # The next refresh is 10 s away. Any read of these FIFOs would block htop until then:
+        # every AMD sample reads the busy counter, every Intel sample the PCI vendor file first.
+        for guard in (busy, vendor):
+            guard.unlink()
+            os.mkfifo(guard)
+        for _ in range(10):
+            os.write(session.fd, b"\x1b[B")
+            session.until(lambda s: False, timeout=0.1)
+        os.write(session.fd, b"q")
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not exited:
+            pid, wait = os.waitpid(session.pid, os.WNOHANG)
+            if pid:
+                exited, status = True, os.waitstatus_to_exitcode(wait)
+            else:
+                session.until(lambda s: False, timeout=0.05)
+        check("redraws between refreshes read nothing (htop quits at once, cleanly)",
+              exited and status == 0, f"exited={exited} status={status}")
+    finally:
+        if not exited:
+            os.kill(session.pid, signal.SIGKILL)
+            os.waitpid(session.pid, 0)
+        os.close(session.fd)
+        for guard in (busy, vendor):
+            guard.unlink(missing_ok=True)
+    fake_card(sysfs)
+    intel.reset()
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="htop-headings-")
     try:
@@ -158,7 +251,10 @@ def main():
         os.environ["ASAN_OPTIONS"] = f"log_path={logs}/asan:detect_leaks=0"
         os.environ["UBSAN_OPTIONS"] = f"log_path={logs}/ubsan:print_stacktrace=1"
         fake_card(sysfs)
-        build(binary, cpuinfo, sysfs)
+        Tree = runpy.run_path(f"{HERE}/test-intel-gpu.py")["Tree"]
+        intel, ids = Tree(f"{tmp}/intel"), f"{tmp}/pci.ids"
+        intel.reset()
+        build(binary, cpuinfo, sysfs, intel, ids)
 
         print("[CPU heading: fake cpuinfo]")
         for name, text, want in CPU_CASES:
@@ -181,6 +277,8 @@ def main():
             check(f"{name}: {want!r}", amd == want and colors == f"[cyan]{want}", f"got {amd!r} {colors!r}")
 
         pause_test(binary, sysfs, tmp)
+        redraw_test(binary, sysfs, intel, tmp)
+        intel_heading_test(binary, intel, ids, tmp)
 
         print("[sanitizers]")
         reports = os.listdir(logs)

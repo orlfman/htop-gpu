@@ -12,6 +12,12 @@ This supplements PLAN.md and follows AGENTS.md.
 The user wants Intel iGPU stats below the RX 9070 XT stats in the existing third column.
 The user selected Mission Center's utilization, clock speed, memory usage, and video encode/decode as the initial baseline, and requested a plan update before implementation.
 
+## Model heading
+
+The heading (htop `342dcaf9`, package 3.5.3-20) uses the selected iGPU's PCI device ID and the system's `pci.ids`. It looks up device-level entries under vendor `8086` and reads the file again when the selected device changes. Missing entries use `Intel iGPU`. The model remains visible alongside sleep and error states. Reading the name uses PCI metadata already available during discovery.
+
+MangoHud's `gpu_name` uses `pci.ids`. nvtop obtains the Intel device name from udev's `ID_MODEL_FROM_DATABASE`. On the 270K Plus, `lspci` 3.15.0, udev, and the development heading agree on `Arrow Lake-S [Intel Graphics]`. nvtop 3.4.0 shows the same name with parentheses. [MangoHud v0.8.4](https://github.com/flightlessmango/MangoHud/blob/v0.8.4/README.md) · [nvtop 3.4.0 Intel discovery](https://github.com/Syllo/nvtop/blob/3.4.0/src/extract_gpuinfo_intel.c) · [pci.ids format](https://man.archlinux.org/man/pci.ids.5.en)
+
 ## Compatibility update (2026-11-19)
 
 The local source and 3.5.3-17 package recipe extend the original single-device baseline to the Tiger Lake, Rocket Lake, Alder Lake and later integrated families listed in the README. The sampler uses the bound driver and PCI identity. On i915 it reads engine time and allocated system0 bytes. On xe it compares busy and total GPU cycle deltas and sums the separate system and GTT allocation totals. It finds the graphics GT by render or compute engine class. A GPU exposing only one of those classes can supply utilization from that class. The release records below describe the original i915 implementation. See AUDIT.md for verification and hardware coverage.
@@ -67,8 +73,7 @@ Readable `/proc/<pid>/fdinfo/<fd>` entries contain:
 An inventory found ten distinct readable Intel clients after deduplicating PCI address/client ID.
 Some process fdinfo directories cannot be inspected by this user; this is not proof those processes use the GPU.
 Therefore the result is activity attributable to visible clients, with possible omissions from other or short-lived clients.
-Meter descriptions communicate that scope. At the user's request, the normal
-heading is just `Intel iGPU`; sleep and access/error indications remain visible.
+The meter descriptions explain which apps the readings cover. The heading shows the model and any sleep or access status.
 
 The [DRM usage-statistics specification](https://docs.kernel.org/gpu/drm-usage-stats.html) defines client identity, engine capacities, counter behavior, and memory categories.
 The [i915 implementation](https://raw.githubusercontent.com/torvalds/linux/v7.3/drivers/gpu/drm/i915/i915_drm_client.c) confirms accounting per engine class.

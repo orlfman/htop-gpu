@@ -1,0 +1,154 @@
+From 342dcaf99ea8a3ec6d7f779e31c1b24d68b31421 Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 20:23:29 -0700
+Subject: [PATCH 21/21] linux: show the Intel iGPU model in its heading
+
+Look up the selected iGPU's PCI device ID in pci.ids (hwdata, misc or
+/usr/share/pci.ids) when the device changes, and show that model in
+the IntelGPUInfo heading, e.g. "Arrow Lake-S [Intel Graphics]". The
+"Intel iGPU" caption remains the fallback, and the sleep and N/A
+suffixes are kept. The caption uses IntelGPU_lastSample(), so redraws
+between refreshes read nothing.
+
+Co-Authored-By: OpenAI Codex (GPT-6.2 Astra) <noreply@openai.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ linux/IntelGPU.c      | 54 ++++++++++++++++++++++++++++++++++++++++++-
+ linux/IntelGPU.h      |  1 +
+ linux/IntelGPUMeter.c |  8 +++++++
+ 3 files changed, 62 insertions(+), 1 deletion(-)
+
+diff --git a/linux/IntelGPU.c b/linux/IntelGPU.c
+index bafcfd22..f83230a7 100644
+--- a/linux/IntelGPU.c
++++ b/linux/IntelGPU.c
+@@ -19,6 +19,7 @@ in the source distribution for its full text.
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <strings.h>
+ #include <time.h>
+ #include <unistd.h>
+ #include <linux/stat.h>
+@@ -57,6 +58,7 @@ enum IntelGPUEngine_ {
+ typedef struct IntelGPUDevice_ {
+    bool xe;
+    unsigned int graphicsEngines;
++   uint16_t product;
+    char pci[16];
+    char dir[1024];
+    char card[1024];
+@@ -367,6 +369,51 @@ static bool IntelGPU_supported(uint64_t product) {
+    return false;
+ }
+ 
++/* pci.ids groups one-tab device entries under each vendor. Two tabs mark subsystem entries. */
++static bool IntelGPU_lookupModel(const char* path, uint16_t product, char* model, size_t size) {
++   FILE* file = fopen(path, "r");
++   if (!file)
++      return false;
++
++   char id[5];
++   xSnprintf(id, sizeof(id), "%04x", (unsigned int)product);
++   bool intel = false;
++   char* line;
++   while ((line = String_readLine(file))) {
++      if (String_startsWith(line, "8086 ")) {
++         intel = true;
++      } else if (intel && line[0] == '\t' && strncasecmp(line + 1, id, 4) == 0 && line[5] == ' ') {
++         char* name = String_trim(line + 6);
++         String_safeStrncpy(model, name, size);
++         free(name);
++      } else if (intel && line[0] && line[0] != '#' && !isspace((unsigned char)line[0])) {
++         free(line);
++         break;
++      }
++
++      free(line);
++      if (model[0])
++         break;
++   }
++   fclose(file);
++   return model[0] != '\0';
++}
++
++static void IntelGPU_readModel(uint16_t product, char* model, size_t size) {
++   static const char* const paths[] = {
++#ifdef INTELGPU_PCI_IDS_FILE
++      INTELGPU_PCI_IDS_FILE,
++#else
++      "/usr/share/hwdata/pci.ids",
++      "/usr/share/misc/pci.ids",
++      "/usr/share/pci.ids",
++#endif
++   };
++   for (size_t i = 0; i < ARRAYSIZE(paths); i++)
++      if (IntelGPU_lookupModel(paths[i], product, model, size))
++         break;
++}
++
+ /* Metadata only: no DRM node is opened and no hardware counter is read here. */
+ static void IntelGPU_findDevice(IntelGPUDevice* found, bool xe) {
+    const char* driverDir = xe ? INTELGPU_SYSFS_ROOT "/bus/pci/drivers/xe" : INTELGPU_SYSFS_ROOT "/bus/pci/drivers/i915";
+@@ -413,6 +460,7 @@ static void IntelGPU_findDevice(IntelGPUDevice* found, bool xe) {
+       struct stat st;
+       if (!candidate.card[0] || stat(candidate.card, &st) != 0)
+          continue;
++      candidate.product = (uint16_t)product;
+       candidate.fsDevice = st.st_dev;
+       candidate.inode = st.st_ino;
+       xSnprintf(candidate.pci, sizeof(candidate.pci), "%s", entry->d_name);
+@@ -1182,10 +1230,14 @@ static void IntelGPU_refresh(uint64_t monotonicMs) {
+       return;
+    }
+    const bool sameDevice = String_eq(device.pci, found.pci) && String_eq(device.card, found.card) &&
+-                           device.fsDevice == found.fsDevice && device.inode == found.inode;
++                           device.fsDevice == found.fsDevice && device.inode == found.inode &&
++                           device.product == found.product;
+    if (!sameDevice) {
+       IntelGPU_clearClients();
+       IntelGPU_clearProcesses();
++      IntelGPU_readModel(found.product, sample.model, sizeof(sample.model));
++   } else {
++      memcpy(sample.model, previous.model, sizeof(sample.model));
+    }
+    device = found;
+    xSnprintf(sample.pci, sizeof(sample.pci), "%s", device.pci);
+diff --git a/linux/IntelGPU.h b/linux/IntelGPU.h
+index 5fefba9f..e0251a8b 100644
+--- a/linux/IntelGPU.h
++++ b/linux/IntelGPU.h
+@@ -25,6 +25,7 @@ typedef enum IntelGPUStatus_ {
+ typedef struct IntelGPUSample_ {
+    IntelGPUStatus status;
+    char pci[16];
++   char model[96];
+    unsigned int clients;
+    unsigned int denied;
+    unsigned int memoryClients;
+diff --git a/linux/IntelGPUMeter.c b/linux/IntelGPUMeter.c
+index e034f12c..4a56926d 100644
+--- a/linux/IntelGPUMeter.c
++++ b/linux/IntelGPUMeter.c
+@@ -57,6 +57,13 @@ static void IntelGPUInfoMeter_updateValues(Meter* this) {
+    xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), ": %s", IntelGPUMeter_status(sample));
+ }
+ 
++/* Captions are drawn on every redraw, also between refreshes. Reading here would scan every
++   process's descriptors on every key press, so use the sample taken by the last refresh. */
++static const char* IntelGPUInfoMeter_getCaption(const Meter* this) {
++   const IntelGPUSample* sample = IntelGPU_lastSample();
++   return sample->model[0] ? sample->model : this->caption;
++}
++
+ static void IntelGPUUsageMeter_updateValues(Meter* this) {
+    const IntelGPUSample* sample = IntelGPUMeter_getSample(this);
+    if (IntelGPUMeter_unavailable(this, sample, sample->usage))
+@@ -113,6 +120,7 @@ const MeterClass IntelGPUInfoMeter_class = {
+       .delete = Meter_delete,
+    },
+    .updateValues = IntelGPUInfoMeter_updateValues,
++   .getCaption = IntelGPUInfoMeter_getCaption,
+    .defaultMode = TEXT_METERMODE,
+    .supportedModes = 1 << TEXT_METERMODE,
+    .maxItems = 0,

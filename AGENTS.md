@@ -20,8 +20,9 @@ visible-app utilization, requested clock, approximate allocated memory, and
 combined video encode/decode. See `PLAN-INTEL-IGPU.md` for scope and release status.
 Clock/memory readouts show only the frequency/amount; their meter descriptions
 retain the requested-clock and approximate-allocation source details.
-The heading is `Intel iGPU` during normal use; sleep and access/error indications
-remain. Readable-app coverage is explained in meter descriptions, not the heading.
+The heading (htop `342dcaf9`, package 3.5.3-20) looks up the iGPU model in `pci.ids`, with `Intel iGPU`
+as the fallback. It also shows sleep and access status. The meter descriptions
+explain readable-app coverage.
 Finding 8 is fixed: known Intel PID/starttime/FD ownership survives access gaps,
 so lost access does not become a false zero. Tests cover aliases, exit, and reuse.
 The Intel source is committed as `bb4f7331` (reviewed 2026-10-29); patch 0010 is

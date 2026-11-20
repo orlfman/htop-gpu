@@ -1,7 +1,7 @@
 From f842f4863fabb061e000ac12bb21a4fd870d33f7 Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Wed, 11 Nov 2026 17:48:16 -0700
-Subject: [PATCH 13/19] linux: support RDNA 2 and newer AMD dedicated cards
+Subject: [PATCH 13/21] linux: support RDNA 2 and newer AMD dedicated cards
 
 The AMDGPU sampler only accepted PCI device 0x7550 (RX 9070 XT). Pick
 the card by the graphics core (GC) version in amdgpu's ip_discovery

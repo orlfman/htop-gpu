@@ -57,7 +57,7 @@ For Intel and AMD CPUs:
 
 - Package power in watts, against the CPU's long term power limit when it reports one
 
-There are also two headings you can put above a group of meters: one with the card's name, and one with the CPU's name ("Intel Core Ultra 7 270K Plus" here), like the "Intel iGPU" one.
+The CPU and Radeon headings show their model names. The Intel heading shows the model from the system PCI database too. On my machine it shows `Arrow Lake-S [Intel Graphics]`. If the database has no name for the device, it shows `Intel iGPU`.
 
 All of them work like normal htop meters. You add them in F2 Setup and can show each one as a bar, text, graph or LED. Two exceptions: the headings are just text, and the Intel iGPU memory meter is text or LED only, since there's no total to draw a bar against. Like htop's own CPU and memory meters, they keep updating when you pause the process list with `Z`.
 
