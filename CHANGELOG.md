@@ -3,6 +3,16 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-11-19, Claude Code (Claude Opus 5.5) — README for CPU power
+
+Docs only, at the user's request.
+
+- The intro and the "works with" sentence now mention CPU power on Intel and AMD.
+- A short CPU column example (heading plus `Pwr[... 10.8W/250W]`) sits next to the GPU column one.
+- The CPU section is reworded plainly: it reads the CPU's energy counter, uses `intel-rapl` or `intel-rapl-mmio`, and counts each CPU once. Intel usually reports a long-term limit; AMD reports none through this interface, per the kernel driver noted in PLAN-AMD-CPU-POWER.md, so AMD shows watts only. Testing is the 270K Plus only, with AMD simulated.
+- The udev rule section keeps the user's tested rule and adds an untested, clearly marked pattern covering `intel-rapl-mmio` and more packages.
+- The meters keep updating while paused (`Z`).
+
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — commit and package 3.5.3-19
 
 At the user's request; not pushed, not installed.

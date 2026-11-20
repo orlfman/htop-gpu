@@ -1,10 +1,10 @@
 # htop-gpu
 
-This is my own build of [htop](https://htop.dev) with GPU stats added to the header. Regular htop can show a combined GPU percentage, but it can't tell me anything about VRAM, temperatures, power or clocks, and it lumps my two GPUs together. So I added the meters I actually wanted.
+This is my own build of [htop](https://htop.dev) with GPU stats and CPU power added to the header. Regular htop can show a combined GPU percentage, but it can't tell me anything about VRAM, temperatures, power or clocks, it lumps my two GPUs together, and it has no idea how many watts the CPU is pulling. So I added the meters I actually wanted.
 
-It started out built for my own machine (an AMD Radeon RX 9070 XT and the Intel iGPU in my Core Ultra 7 270K Plus), but it now works with recent AMD cards and Intel iGPUs in general. It installs as `htop-gpu`, right next to the normal `htop`, so the regular one stays untouched and keeps getting updates.
+It started out built for my own machine (an AMD Radeon RX 9070 XT and the Intel iGPU in my Core Ultra 7 270K Plus), but it now works with recent AMD cards, Intel iGPUs, and the power readings of both Intel and AMD CPUs. It installs as `htop-gpu`, right next to the normal `htop`, so the regular one stays untouched and keeps getting updates.
 
-Here's what the extra column looks like on my desktop:
+Here's what the extra GPU column looks like on my desktop:
 
 ```
 Radeon RX 9070 XT
@@ -22,6 +22,14 @@ iGP[                        0%]
 iGPU clock: 0MHz
 iGPU mem: 180M
 Vid[                    0% E/D]
+```
+
+And the CPU column gets a heading with the CPU's name on top and a power meter at the bottom:
+
+```
+Intel Core Ultra 7 270K Plus
+...
+Pwr[|||              10.8W/250W]
 ```
 
 And here it is next to MangoHud while playing Dune: Awakening, which is how I checked that the numbers line up: [htop-gpu](docs/game-load-test/htop-gpu-dune-awakening.png) and [MangoHud](docs/game-load-test/mangohud-dune-awakening.webp).
@@ -45,13 +53,13 @@ For the Intel iGPU:
 
 Usage, video and memory add up the programs htop can read, which in practice means your own. When it can't get a reading, the meter says N/A instead of guessing. The clock comes straight from the driver.
 
-For Intel and AMD CPUs with readable Linux RAPL package counters:
+For Intel and AMD CPUs:
 
-- Package power in watts, with the long-term power limit (PL1) when the kernel reports one
+- Package power in watts, against the CPU's long term power limit when it reports one
 
 There are also two headings you can put above a group of meters: one with the card's name, and one with the CPU's name ("Intel Core Ultra 7 270K Plus" here), like the "Intel iGPU" one.
 
-All of them work like normal htop meters. You add them in F2 Setup and can show each one as a bar, text, graph or LED. Two exceptions: the headings are just text, and the Intel iGPU memory meter is text or LED only, since there's no total to draw a bar against.
+All of them work like normal htop meters. You add them in F2 Setup and can show each one as a bar, text, graph or LED. Two exceptions: the headings are just text, and the Intel iGPU memory meter is text or LED only, since there's no total to draw a bar against. Like htop's own CPU and memory meters, they keep updating when you pause the process list with `Z`.
 
 ## Will it work on my computer?
 
@@ -65,15 +73,17 @@ htop's own `GPU%` and `GPU_TIME` process columns can't use `xe`'s numbers (`xe` 
 
 To find out which programs are using the iGPU, htop-gpu looks at the files they have open. It's careful not to ask network shares or FUSE mounts about those files, so a hung NFS or SMB share shouldn't freeze it.
 
-The CPU power meter uses the Linux powercap package energy counters, which can appear under `intel-rapl` on both Intel and AMD CPUs. AMD support has been checked with simulated counters. Without PL1, the meter shows watts in every mode. Bar fill and the percentage graph use PL1 when it is available.
+The CPU power meter reads the CPU's own energy counter, which Linux shows under `intel-rapl` for both Intel and AMD CPUs (the name is historical). Some Intel CPUs also have a second copy of it under `intel-rapl-mmio`; htop-gpu uses whichever one it can read and counts each CPU once. Intel CPUs usually report a long term power limit too, and then the bar and graph fill up against it. AMD CPUs don't report one through this interface, so there the meter just shows the watts. I've only tested this on my 270K Plus; AMD CPUs are tested against made up copies of their counters, so if you try it on one, I'd like to hear how it goes.
 
-Linux restricts access to RAPL energy counters by default. I made mine readable with this udev rule in `/etc/udev/rules.d/99-rapl-read.rules`:
+Linux keeps the energy counter root only by default. I made mine readable with this udev rule in `/etc/udev/rules.d/99-rapl-read.rules`:
 
 ```
 SUBSYSTEM=="powercap", KERNEL=="intel-rapl:0", ACTION=="add", RUN+="/usr/bin/chmod 0444 /sys%p/energy_uj"
 ```
 
-It's locked down for a reason (the counter has been used for side channel attacks before), so decide for yourself whether that's okay on your machine. The meter shows `no access` when Linux denies a counter read.
+If your counter is under `intel-rapl-mmio:0`, or you have more than one CPU package, list those too, for example `KERNEL=="intel-rapl:[0-9]|intel-rapl-mmio:[0-9]"`. I haven't needed that version myself, so double check it works on yours.
+
+It's locked down for a reason (the counter has been used for side channel attacks before), so decide for yourself whether that's okay on your machine. Without access the meter just says `no access`.
 
 ## Installing
 
