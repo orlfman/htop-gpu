@@ -1,0 +1,579 @@
+From 1c2057054345f62d9b5e54ff734241137b31b572 Mon Sep 17 00:00:00 2001
+From: orlfman <25542856+orlfman@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 17:03:53 -0700
+Subject: [PATCH 17/17] linux: harden Intel iGPU sampling for xe and the GPU%
+ column
+
+Runtime power: reading xe client cycle counters or freq0 restarts the
+GPU's autosuspend timer, so a fast htop refresh kept an idle xe iGPU
+awake. On xe, the clock and client counters are now read at most once
+per autosuspend_delay_ms plus a quarter of it (the kernel's timer
+slack) plus 50 ms, reusing the previous sample in between; sleep state
+is still checked on every refresh, and power/control=on reads every
+refresh. A "resuming" runtime status now shows as sleep instead of N/A,
+on i915 as well.
+
+GPU% column: the generic process reader only understands drm-engine-*
+nanoseconds, while xe reports cycles, and reading an xe descriptor's
+fdinfo is what wakes the GPU. Descriptors whose device node is bound to
+xe are skipped before their fdinfo is read.
+
+Descriptor identification: following a /proc fd link with stat() asks
+the target's own filesystem, which can block on a hung NFS, SMB or FUSE
+mount. Links are now classified from their text first. Non-paths are
+never devices; /dev/dri nodes are looked up; other paths only when they
+resolve to an allowlisted local filesystem, using this process's
+mountinfo resolved by mount and parent ID (one parse per refresh,
+shared by both readers). Anything else is identified by its fdinfo in
+the Intel sampler, which never reaches the file's filesystem, so DRM
+nodes under other names (containers, overlay) are still counted. The
+lookup uses the raw statx system call with cached attributes when
+available, falls back to fstatat/stat when the kernel or a seccomp
+policy rejects it, and builds without openat, readlinkat or fstatat use
+path-based calls.
+
+Co-Authored-By: OpenAI Codex (GPT-6.2 Astra) <noreply@openai.com>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ linux/GPU.c      |   8 +-
+ linux/IntelGPU.c | 379 ++++++++++++++++++++++++++++++++++++++++++++---
+ linux/IntelGPU.h |   5 +
+ 3 files changed, 370 insertions(+), 22 deletions(-)
+
+diff --git a/linux/GPU.c b/linux/GPU.c
+index ce9dee89..bf4b11b4 100644
+--- a/linux/GPU.c
++++ b/linux/GPU.c
+@@ -16,6 +16,7 @@ in the source distribution for its full text.
+ #include <sys/types.h>
+ 
+ #include "linux/Compat.h"
++#include "linux/IntelGPU.h"
+ #include "linux/LinuxMachine.h"
+ 
+ 
+@@ -101,8 +102,8 @@ void GPU_readProcessData(LinuxProcessTable* lpt, LinuxProcess* lp, openat_arg_t
+    fdinfoFd = -1;
+ 
+ #ifndef HAVE_OPENAT
+-   char fdinfoPathBuf[32];
+-   xSnprintf(fdinfoPathBuf, sizeof(fdinfoPathBuf), PROCDIR "/%u/fdinfo", Process_getPid(&lp->super));
++   char fdinfoPathBuf[4096];
++   xSnprintf(fdinfoPathBuf, sizeof(fdinfoPathBuf), "%s/fdinfo", procFd);
+ #endif
+ 
+    while (true) {
+@@ -118,6 +119,9 @@ void GPU_readProcessData(LinuxProcessTable* lpt, LinuxProcess* lp, openat_arg_t
+       if (ename[0] == '.' && (ename[1] == '\0' || (ename[1] == '.' && ename[2] == '\0')))
+          continue;
+ 
++      if (IntelGPU_isXeFd(host->monotonicMs, procFd, ename))
++         continue;
++
+       char buffer[4096];
+ #ifdef HAVE_OPENAT
+       ssize_t ret = Compat_readfileat(dirfd(fdinfoDir), ename, buffer, sizeof(buffer));
+diff --git a/linux/IntelGPU.c b/linux/IntelGPU.c
+index 2c8f5a66..87b74fb6 100644
+--- a/linux/IntelGPU.c
++++ b/linux/IntelGPU.c
+@@ -19,7 +19,11 @@ in the source distribution for its full text.
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <time.h>
++#include <unistd.h>
++#include <linux/stat.h>
+ #include <sys/stat.h>
++#include <sys/syscall.h>
+ #include <sys/sysmacros.h>
+ #include <sys/types.h>
+ 
+@@ -34,6 +38,9 @@ in the source distribution for its full text.
+ #ifndef INTELGPU_PROC_ROOT
+ #define INTELGPU_PROC_ROOT "/proc"
+ #endif
++#ifndef INTELGPU_DRM_PREFIX
++#define INTELGPU_DRM_PREFIX "/dev/dri/"
++#endif
+ 
+ #define INTELGPU_BUCKETS 257
+ #define INTELGPU_ENGINE_COUNT 3
+@@ -122,6 +129,7 @@ static IntelGPUSample sample;
+ static bool initialized;
+ static bool procScanned;
+ static uint64_t lastMonotonicMs;
++static uint64_t lastXeReadMs;
+ static uint64_t cycle;
+ 
+ static char* IntelGPU_trim(char* text) {
+@@ -433,7 +441,7 @@ static bool IntelGPU_memory(const char* text, uint64_t* bytes) {
+    return true;
+ }
+ 
+-static int IntelGPU_parse(char* buffer, IntelGPUObservation* out) {
++static int IntelGPU_parse(char* buffer, IntelGPUObservation* out, bool unclassified) {
+    const char* driver = "";
+    const char* pci = "";
+    bool idValid = false;
+@@ -494,8 +502,9 @@ static int IntelGPU_parse(char* buffer, IntelGPUObservation* out) {
+          }
+       }
+    }
+-   /* A path-only reference to the DRM node has no client or counters. */
+-   if (pathOnly && !hasDrmKey)
++   /* A path-only reference to the DRM node has no client or counters, and an unclassified
++    * file without DRM keys is not a GPU client at all. */
++   if (!hasDrmKey && (pathOnly || unclassified))
+       return 0;
+ 
+    /* The descriptor matched a device node before fdinfo was read. */
+@@ -559,16 +568,270 @@ static void IntelGPU_observe(const IntelGPUObservation* observation) {
+    }
+ }
+ 
+-static bool IntelGPU_drmFile(const char* path, bool* denied) {
+-   struct stat st;
+-   if (stat(path, &st) != 0) {
+-      *denied = errno == EACCES || errno == EPERM;
++typedef struct IntelGPUMount_ {
++   unsigned long id;
++   unsigned long parent;
++   char* path;
++   size_t length;
++   bool local;
++} IntelGPUMount;
++
++static IntelGPUMount* mounts;
++static size_t mountCount;
++static size_t mountCapacity;
++static size_t mountRoot = SIZE_MAX;
++static uint64_t mountsMs = UINT64_MAX;
++static size_t* candidates;
++static size_t candidateCount;
++static size_t candidateCapacity;
++
++/* Filesystems that answer attribute lookups without a server or daemon. Every other type,
++ * including network filesystems missing from this list, is never looked up. */
++static bool IntelGPU_localType(const char* type) {
++   static const char* const local[] = {
++      "devtmpfs", "tmpfs", "ramfs", "ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs",
++      "bcachefs", "zfs", "jfs", "nilfs2", "vfat", "exfat", "ntfs3",
++   };
++   for (size_t i = 0; i < ARRAYSIZE(local); i++)
++      if (String_eq(type, local[i]))
++         return true;
++   return false;
++}
++
++/* mountinfo escapes space, tab, newline and backslash as three octal digits. */
++static void IntelGPU_unescape(char* text) {
++   char* out = text;
++   const char* in = text;
++   while (*in) {
++      if (in[0] == '\\' && in[1] >= '0' && in[1] <= '3' && in[2] >= '0' && in[2] <= '7' && in[3] >= '0' && in[3] <= '7') {
++         *out++ = (char)((in[1] - '0') * 64 + (in[2] - '0') * 8 + (in[3] - '0'));
++         in += 4;
++      } else {
++         *out++ = *in++;
++      }
++   }
++   *out = '\0';
++}
++
++static bool IntelGPU_mountId(const char* text, unsigned long* id) {
++   char* end;
++   errno = 0;
++   *id = strtoul(text, &end, 10);
++   return !errno && end != text && !*end;
++}
++
++/* One parse per refresh, shared by the Intel meters and the GPU% column. */
++static void IntelGPU_loadMounts(uint64_t monotonicMs) {
++   if (mountsMs == monotonicMs)
++      return;
++
++   mountsMs = monotonicMs;
++   for (size_t i = 0; i < mountCount; i++)
++      free(mounts[i].path);
++   mountCount = 0;
++   mountRoot = SIZE_MAX;
++
++   FILE* file = fopen(INTELGPU_PROC_ROOT "/self/mountinfo", "r");
++   if (!file)
++      return;
++
++   char* line = NULL;
++   size_t size = 0;
++   while (getline(&line, &size, file) > 0) {
++      /* id parent major:minor root mountpoint options [optional fields] - type source superoptions */
++      char* fields[5] = {0};
++      char* cursor = line;
++      for (size_t i = 0; i < ARRAYSIZE(fields) && cursor; i++)
++         fields[i] = strsep(&cursor, " ");
++      char* separator = cursor ? strstr(cursor, " - ") : NULL;
++      unsigned long id, parent;
++      if (!fields[4] || !separator || !IntelGPU_mountId(fields[0], &id) || !IntelGPU_mountId(fields[1], &parent))
++         continue;
++
++      char* type = separator + 3;
++      type[strcspn(type, " \n")] = '\0';
++      IntelGPU_unescape(fields[4]);
++      if (mountCount == mountCapacity) {
++         mountCapacity = mountCapacity ? mountCapacity * 2 : 32;
++         mounts = xReallocArray(mounts, mountCapacity, sizeof(*mounts));
++      }
++      mounts[mountCount++] = (IntelGPUMount) {
++         .id = id, .parent = parent, .path = xStrdup(fields[4]), .length = strlen(fields[4]),
++         .local = IntelGPU_localType(type),
++      };
++   }
++   free(line);
++   fclose(file);
++
++   /* The root of the walk: the first "/" mount whose parent is not in this table. */
++   for (size_t i = 0; i < mountCount && mountRoot == SIZE_MAX; i++) {
++      if (!String_eq(mounts[i].path, "/"))
++         continue;
++      bool covered = false;
++      for (size_t j = 0; j < mountCount && !covered; j++)
++         covered = j != i && mounts[j].id == mounts[i].parent;
++      if (!covered)
++         mountRoot = i;
++   }
++}
++
++/* The last candidate with this parent at this mount point. A mount stacked on the same place
++ * has the covered mount as its parent and comes later in the table. */
++static const IntelGPUMount* IntelGPU_childAt(unsigned long parent, const char* path) {
++   const IntelGPUMount* found = NULL;
++   for (size_t i = 0; i < candidateCount; i++) {
++      const IntelGPUMount* mount = &mounts[candidates[i]];
++      if (mount->parent == parent && mount->id != parent && String_eq(mount->path, path))
++         found = mount;
++   }
++   return found;
++}
++
++/* Follow mounts stacked on the same place up to the visible one. */
++static const IntelGPUMount* IntelGPU_topmost(const IntelGPUMount* mount) {
++   for (size_t guard = 0; guard < mountCount; guard++) {
++      const IntelGPUMount* above = IntelGPU_childAt(mount->id, mount->path);
++      if (!above)
++         break;
++      mount = above;
++   }
++   return mount;
++}
++
++/* Resolve the mount holding a path the way a path walk does: start at the visible root mount,
++ * then enter the visible child mounted at each leading directory. Mounts hidden under a later
++ * mount are never reached. The link text is a path in this process's mount namespace, so this
++ * process's table is used. An unreadable or unresolvable table counts as not local. */
++static bool IntelGPU_localPath(const char* path, uint64_t monotonicMs) {
++   IntelGPU_loadMounts(monotonicMs);
++   if (mountRoot == SIZE_MAX)
+       return false;
++
++   /* Only mounts at the path itself or at one of its leading directories can hold it.
++    * One pass collects them, so the walk below never rescans the whole table. */
++   candidateCount = 0;
++   for (size_t i = 0; i < mountCount; i++) {
++      const IntelGPUMount* mount = &mounts[i];
++      bool root = mount->length == 1 && mount->path[0] == '/';
++      if (strncmp(path, mount->path, mount->length) != 0 ||
++            (!root && path[mount->length] != '\0' && path[mount->length] != '/'))
++         continue;
++      if (candidateCount == candidateCapacity) {
++         candidateCapacity = candidateCapacity ? candidateCapacity * 2 : 16;
++         candidates = xReallocArray(candidates, candidateCapacity, sizeof(*candidates));
++      }
++      candidates[candidateCount++] = i;
+    }
+-   if (!S_ISCHR(st.st_mode))
++
++   const IntelGPUMount* mount = IntelGPU_topmost(&mounts[mountRoot]);
++   char prefix[4096];
++   size_t length = strlen(path);
++   if (length >= sizeof(prefix))
+       return false;
++
++   for (size_t i = 1; i <= length; i++) {
++      if (i < length && path[i] != '/')
++         continue;
++      memcpy(prefix, path, i);
++      prefix[i] = '\0';
++      const IntelGPUMount* child = IntelGPU_childAt(mount->id, prefix);
++      if (child)
++         mount = IntelGPU_topmost(child);
++   }
++   return mount->local;
++}
++
++/* Without the *at calls, reach the link through its directory's /proc/self/fd entry. */
++ATTR_UNUSED
++static const char* IntelGPU_atPath(int dir, const char* path, char* buffer, size_t size) {
++   if (dir == AT_FDCWD)
++      return path;
++   xSnprintf(buffer, size, "/proc/self/fd/%d/%s", dir, path);
++   return buffer;
++}
++
++static ssize_t IntelGPU_readlink(int dir, const char* path, char* buffer, size_t size) {
++#ifdef HAVE_READLINKAT
++   return readlinkat(dir, path, buffer, size);
++#else
++   char full[4096];
++   return readlink(IntelGPU_atPath(dir, path, full, sizeof(full)), buffer, size);
++#endif
++}
++
++#if defined(SYS_statx) && defined(STATX_TYPE) && defined(AT_STATX_DONT_SYNC)
++#define INTELGPU_HAVE_STATX
++#endif
++
++static bool IntelGPU_lookupDevice(int dir, const char* path, dev_t* rdev) {
++#ifdef INTELGPU_HAVE_STATX
++   /* The raw system call needs no libc wrapper. It asks for cached attributes only, as an
++    * extra guard for paths from other mount namespaces. Where the kernel or a seccomp policy
++    * rejects it, stat is used from then on instead of losing the client. */
++   static bool statxMissing;
++   if (!statxMissing) {
++      struct statx stx;
++      if (syscall(SYS_statx, (long)dir, path, (long)AT_STATX_DONT_SYNC, (long)STATX_TYPE, &stx) == 0) {
++         if (!(stx.stx_mask & STATX_TYPE) || !S_ISCHR(stx.stx_mode))
++            return false;
++         *rdev = makedev(stx.stx_rdev_major, stx.stx_rdev_minor);
++         return true;
++      }
++      if (errno != ENOSYS && errno != EPERM)
++         return false;
++      statxMissing = true;
++   }
++#endif
++
++   struct stat st;
++#ifdef HAVE_FSTATAT
++   int ret = fstatat(dir, path, &st, 0);
++#else
++   char full[4096];
++   int ret = stat(IntelGPU_atPath(dir, path, full, sizeof(full)), &st);
++#endif
++   if (ret != 0 || !S_ISCHR(st.st_mode))
++      return false;
++   *rdev = st.st_rdev;
++   return true;
++}
++
++typedef enum IntelGPUFdKind_ {
++   INTELGPU_FD_OTHER,        /* not a device, or the descriptor went away */
++   INTELGPU_FD_DENIED,       /* the link or its target could not be read */
++   INTELGPU_FD_DEVICE,       /* a character device, *rdev is set */
++   INTELGPU_FD_UNCLASSIFIED, /* a path that is never looked up, identified by fdinfo instead */
++} IntelGPUFdKind;
++
++/* Classify a /proc fd link without asking a network or FUSE filesystem, which can block on
++ * a hung NFS, SMB or FUSE mount. Link texts that are not paths (sockets, pipes, anonymous
++ * inodes) are never devices. DRM nodes are looked up directly, other paths only when they
++ * resolve to a local filesystem. Everything else is unclassified: fdinfo only reports the
++ * kernel's own bookkeeping, so the Intel sampler can identify such a client from it. */
++static IntelGPUFdKind IntelGPU_fdDevice(int dir, const char* path, dev_t* rdev, uint64_t monotonicMs) {
++   char target[4096];
++   ssize_t n = IntelGPU_readlink(dir, path, target, sizeof(target) - 1);
++   if (n < 0)
++      return errno == EACCES || errno == EPERM ? INTELGPU_FD_DENIED : INTELGPU_FD_OTHER;
++   if ((size_t)n >= sizeof(target) - 1)
++      return INTELGPU_FD_UNCLASSIFIED;
++
++   target[n] = '\0';
++   if (target[0] != '/')
++      return INTELGPU_FD_OTHER;
++   bool lookUp = String_startsWith(target, INTELGPU_DRM_PREFIX) || IntelGPU_localPath(target, monotonicMs);
++   if (!lookUp)
++      return INTELGPU_FD_UNCLASSIFIED;
++
++   errno = 0;
++   if (!IntelGPU_lookupDevice(dir, path, rdev))
++      return errno == EACCES || errno == EPERM ? INTELGPU_FD_DENIED : INTELGPU_FD_OTHER;
++   return INTELGPU_FD_DEVICE;
++}
++
++static bool IntelGPU_ownNode(dev_t rdev) {
+    for (size_t i = 0; i < device.nodeCount; i++)
+-      if (st.st_rdev == device.nodes[i])
++      if (rdev == device.nodes[i])
+          return true;
+    return false;
+ }
+@@ -744,26 +1007,31 @@ static void IntelGPU_readClients(uint64_t monotonicMs) {
+          if (!IntelGPU_number(entry->d_name, 10, &fd, &unit) || *unit)
+             continue;
+          xSnprintf(path, sizeof(path), INTELGPU_PROC_ROOT "/%s/fd/%s", process->d_name, entry->d_name);
+-         bool denied = false;
+-         if (!IntelGPU_drmFile(path, &denied)) {
+-            if (denied) {
+-               sample.denied++;
+-               IntelGPU_blockClient(owner, fd);
+-            }
++         dev_t rdev;
++         IntelGPUFdKind kind = IntelGPU_fdDevice(AT_FDCWD, path, &rdev, monotonicMs);
++         if (kind == INTELGPU_FD_DENIED) {
++            sample.denied++;
++            IntelGPU_blockClient(owner, fd);
+             continue;
+          }
++         if (kind == INTELGPU_FD_OTHER || (kind == INTELGPU_FD_DEVICE && !IntelGPU_ownNode(rdev)))
++            continue;
++
++         bool unclassified = kind == INTELGPU_FD_UNCLASSIFIED;
+          xSnprintf(path, sizeof(path), INTELGPU_PROC_ROOT "/%s/fdinfo/%s", process->d_name, entry->d_name);
+          char buffer[65536];
+          ssize_t n = Compat_readfile(path, buffer, sizeof(buffer));
+          if (n <= 0 || (size_t)n >= sizeof(buffer) - 1) {
+-            sample.incomplete = true;
++            /* An unreadable unclassified file only leaves a gap if it was a known client. */
++            if (!unclassified)
++               sample.incomplete = true;
+             IntelGPU_blockClient(owner, fd);
+             if (n == -EACCES || n == -EPERM)
+                sample.denied++;
+             continue;
+          }
+          IntelGPUObservation observation;
+-         int parsed = IntelGPU_parse(buffer, &observation);
++         int parsed = IntelGPU_parse(buffer, &observation, unclassified);
+          if (parsed > 0) {
+             IntelGPU_observe(&observation);
+             if (!owner)
+@@ -840,7 +1108,69 @@ static void IntelGPU_readTopology(void) {
+    closedir(tile);
+ }
+ 
++bool IntelGPU_isXeFd(uint64_t monotonicMs, openat_arg_t procFd, const char* fd) {
++   static uint64_t checkedMs = UINT64_MAX;
++   static struct stat xeDriver;
++   static bool haveXe;
++
++   if (checkedMs != monotonicMs) {
++      checkedMs = monotonicMs;
++      haveXe = stat(INTELGPU_SYSFS_ROOT "/bus/pci/drivers/xe", &xeDriver) == 0;
++   }
++   if (!haveXe)
++      return false;
++
++   char path[1024];
++   dev_t rdev;
++#ifdef HAVE_OPENAT
++   int linkDir = procFd;
++   xSnprintf(path, sizeof(path), "fd/%s", fd);
++#else
++   int linkDir = AT_FDCWD;
++   xSnprintf(path, sizeof(path), "%s/fd/%s", procFd, fd);
++#endif
++   /* An unclassified descriptor could only be identified through its fdinfo, which is the very
++    * read that wakes xe. It is not skipped, so GPU% keeps upstream behavior for it. */
++   if (IntelGPU_fdDevice(linkDir, path, &rdev, monotonicMs) != INTELGPU_FD_DEVICE)
++      return false;
++
++   /* Follow the node's current driver binding. Card and render minors can be reused. */
++   struct stat st;
++   xSnprintf(path, sizeof(path), INTELGPU_SYSFS_ROOT "/dev/char/%u:%u/device/driver", major(rdev), minor(rdev));
++   return stat(path, &st) == 0 && st.st_dev == xeDriver.st_dev && st.st_ino == xeDriver.st_ino;
++}
++
++static uint64_t IntelGPU_nowMs(void) {
++   struct timespec ts;
++   if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
++      return 0;
++   return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
++}
++
++static bool IntelGPU_xeReadDue(void) {
++   char buffer[64];
++   if (IntelGPU_readText(device.dir, "power/control", buffer, sizeof(buffer)) && String_eq(buffer, "on"))
++      return true;
++
++   long delay = 1000;
++   if (IntelGPU_readText(device.dir, "power/autosuspend_delay_ms", buffer, sizeof(buffer))) {
++      char* end;
++      errno = 0;
++      long configured = strtol(buffer, &end, 10);
++      if (!errno && end != buffer && !*end)
++         delay = configured;
++   }
++   if (delay <= 0)
++      return true;
++
++   /* Runtime PM allows 25% timer slack. Give suspend another 50 ms before a read can mark the GPU busy. */
++   const uint64_t pmSlackMs = (uint64_t)delay / 4 + 50;
++   uint64_t now = IntelGPU_nowMs();
++   return !lastXeReadMs || now < lastXeReadMs || now - lastXeReadMs >= (uint64_t)delay + pmSlackMs;
++}
++
+ static void IntelGPU_refresh(uint64_t monotonicMs) {
++   const IntelGPUSample previous = sample;
+    IntelGPU_resetSample();
+    IntelGPUDevice found = {0};
+    IntelGPU_findDevice(&found, false);
+@@ -851,8 +1181,9 @@ static void IntelGPU_refresh(uint64_t monotonicMs) {
+       memset(&device, 0, sizeof(device));
+       return;
+    }
+-   if (!String_eq(device.pci, found.pci) || !String_eq(device.card, found.card) ||
+-         device.fsDevice != found.fsDevice || device.inode != found.inode) {
++   const bool sameDevice = String_eq(device.pci, found.pci) && String_eq(device.card, found.card) &&
++                           device.fsDevice == found.fsDevice && device.inode == found.inode;
++   if (!sameDevice) {
+       IntelGPU_clearClients();
+       IntelGPU_clearProcesses();
+    }
+@@ -865,7 +1196,7 @@ static void IntelGPU_refresh(uint64_t monotonicMs) {
+       IntelGPU_clearClients();
+       return;
+    }
+-   if (String_eq(state, "suspended") || String_eq(state, "suspending")) {
++   if (String_eq(state, "suspended") || String_eq(state, "suspending") || String_eq(state, "resuming")) {
+       sample.status = INTELGPU_SUSPENDED;
+       IntelGPU_clearClients();
+       return;
+@@ -875,9 +1206,17 @@ static void IntelGPU_refresh(uint64_t monotonicMs) {
+       IntelGPU_clearClients();
+       return;
+    }
++   if (device.xe && sameDevice && previous.status == INTELGPU_ACTIVE && !IntelGPU_xeReadDue()) {
++      sample = previous;
++      return;
++   }
++
+    sample.status = INTELGPU_ACTIVE;
+    IntelGPU_readTopology();
+    IntelGPU_readClients(monotonicMs);
++   /* A counter read near the end of a long scan can restart the PM timer. */
++   if (device.xe)
++      lastXeReadMs = IntelGPU_nowMs();
+ }
+ 
+ const IntelGPUSample* IntelGPU_getSample(uint64_t monotonicMs) {
+diff --git a/linux/IntelGPU.h b/linux/IntelGPU.h
+index db11a453..13624e36 100644
+--- a/linux/IntelGPU.h
++++ b/linux/IntelGPU.h
+@@ -10,6 +10,8 @@ in the source distribution for its full text.
+ #include <stdbool.h>
+ #include <stdint.h>
+ 
++#include "linux/Compat.h"
++
+ 
+ typedef enum IntelGPUStatus_ {
+    INTELGPU_NOT_FOUND,
+@@ -40,6 +42,9 @@ typedef struct IntelGPUSample_ {
+    double clockMax;      /* current configured maximum, MHz */
+ } IntelGPUSample;
+ 
++/* Xe fdinfo reports cycles, which the generic nanosecond-based GPU reader cannot use. */
++bool IntelGPU_isXeFd(uint64_t monotonicMs, openat_arg_t procFd, const char* fd);
++
+ /* All Intel meters share one sample per newer monotonicMs; deltas need a baseline. */
+ const IntelGPUSample* IntelGPU_getSample(uint64_t monotonicMs);
+ 

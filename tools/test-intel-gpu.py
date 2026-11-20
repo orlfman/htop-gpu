@@ -3,6 +3,7 @@
 
 Run python3 -I tools/test-intel-gpu.py [--fake-only] [--mutations].
 Fake fd links use /dev/null, whose device number is advertised by the fake DRM nodes.
+Fake builds accept DRM links under /dev/ instead of /dev/dri/ for that reason.
 Live tests pin Intel VA-API/Vulkan and keep temporary media inside the test directory.
 """
 import argparse
@@ -30,18 +31,24 @@ def check(label, good, detail=""):
         failures.append(label)
 
 
-def build(binary, sysroot, procroot, source=None):
-    subprocess.run(["gcc", "-std=c99", "-Wall", "-Wextra", "-Wshadow", "-Wformat-nonliteral", "-Werror",
+def build(binary, sysroot, procroot, source=None, *, process_column=False, extra=()):
+    drivers = [HERE / "process-gpu-sample.c", SRC / "linux/GPU.c"] if process_column else [HERE / "intel-gpu-sample.c"]
+    if process_column:
+        extra = (*extra, "-Wl,--wrap=fopen")
+    clock = [] if process_column or sysroot == "/sys" else ["-DINTELGPU_FAKE_TIME", "-Wl,--wrap=clock_gettime"]
+    # Fixture fd links point at /dev/null and /dev/zero instead of real /dev/dri nodes.
+    dri = [] if sysroot == "/sys" else ['-DINTELGPU_DRM_PREFIX="/dev/"']
+    subprocess.run(["gcc", *extra, *clock, *dri, "-std=c99", "-Wall", "-Wextra", "-Wshadow", "-Wformat-nonliteral", "-Werror",
                     "-O1", "-g", "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
                     f"-I{SRC}", f"-I{SRC}/linux", f'-DINTELGPU_SYSFS_ROOT="{sysroot}"',
-                    f'-DINTELGPU_PROC_ROOT="{procroot}"', str(HERE / "intel-gpu-sample.c"),
+                    f'-DINTELGPU_PROC_ROOT="{procroot}"', *map(str, drivers),
                     str(source or SRC / "linux/IntelGPU.c"), str(SRC / "linux/Compat.c"),
                     str(SRC / "XUtils.c"), "-lm", "-o", str(binary)], check=True)
 
 
 class Sampler:
-    def __init__(self, binary):
-        self.p = subprocess.Popen([str(binary)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    def __init__(self, binary, *args):
+        self.p = subprocess.Popen([str(binary), *args], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, text=True)
 
     def sample(self, ms):
@@ -49,7 +56,7 @@ class Sampler:
         self.p.stdin.flush()
         if not select.select([self.p.stdout], [], [], 4)[0]:
             self.p.kill()
-            raise RuntimeError("sampler timed out (possibly read hardware while suspended)")
+            raise RuntimeError("sampler timed out (possibly opened a guarded hardware file)")
         text = self.p.stdout.readline()
         if not text:
             raise RuntimeError(f"sampler stopped: {self.p.stderr.read()}")
@@ -74,6 +81,17 @@ class Tree:
         self.sys.mkdir(parents=True)
         self.proc.mkdir()
         self.card = "card7"
+        # The sampler's own mount table (proc/self is not a digit, so it is never scanned as a process).
+        self.write(self.proc / "self/mountinfo", "1 0 0:1 / / rw - ext4 /dev/root rw")
+        self.next_mount = 2
+
+    def mount(self, path, fstype, parent=1):
+        """Append a mountinfo row; parent is the mount this one covers or sits in."""
+        mount_id, self.next_mount = self.next_mount, self.next_mount + 1
+        name = str(path).replace(" ", "\\040")
+        with open(self.proc / "self/mountinfo", "a") as table:
+            table.write(f"\n{mount_id} {parent} 0:{mount_id} / {name} rw shared:1 - {fstype} server:/export rw")
+        return mount_id
 
     @property
     def dev(self):
@@ -97,6 +115,7 @@ class Tree:
         self.write(self.dev / "vendor", "0x8086")
         self.write(self.dev / "device", product)
         self.write(self.dev / "power/runtime_status", "active")
+        self.write(self.dev / "power/autosuspend_delay_ms", 10000)
         for node in (self.card, "renderD333"):
             self.write(self.dev / "drm" / node / "dev", "1:3")
         self.write(self.gt / "rps_cur_freq_mhz", 550)
@@ -227,6 +246,126 @@ def fake_tests(binary, t):
          unknown, "partial DRM metadata still marks coverage incomplete"),
     ])
 
+    # A descriptor on another filesystem must never be followed: stat() would ask that
+    # filesystem, which blocks on a hung NFS or FUSE mount. A locked directory stands in
+    # for it, since following the link there fails with EACCES and counts as denied.
+    hung = t.root / "hung-mount"
+
+    def with_unrelated_file(t, fstype):
+        t.start()
+        (hung / "dir").mkdir(parents=True)
+        t.mount(hung, fstype)
+        (t.proc / "100/fd/9").symlink_to(hung / "dir/file")
+        t.write(t.proc / "100/fdinfo/9", "pos:\t0\nflags:\t0100002\nmnt_id:\t99\nino:\t7")
+        os.chmod(hung, 0)
+
+    scenario(binary, t, "descriptor on a FUSE mount is never followed", [
+        (100, lambda t: with_unrelated_file(t, "fuse.sshfs"), {"incomplete": False, "denied": 0, "clients": 1},
+         "FUSE file is skipped by its link text and mount type"),
+        (1100, lambda t: t.client(render=200000000),
+         {"incomplete": False, "denied": 0, "usage": 20.0}, "readings stay complete beside it"),
+        (2100, lambda t: os.chmod(hung, 0o755), {"incomplete": False, "denied": 0}, "unlock the stand-in mount"),
+    ])
+    scenario(binary, t, "descriptor on an unlisted network filesystem is never followed", [
+        (100, lambda t: with_unrelated_file(t, "beegfs"), {"incomplete": False, "denied": 0, "clients": 1},
+         "filesystem types missing from the local list are skipped"),
+        (1100, lambda t: os.chmod(hung, 0o755), {"denied": 0}, "unlock the unlisted stand-in"),
+    ])
+    scenario(binary, t, "descriptor on a local filesystem is looked up", [
+        (100, lambda t: with_unrelated_file(t, "ext4"), {"denied": 1, "clients": 1},
+         "local path is followed, so its permission error is seen"),
+        (1100, lambda t: os.chmod(hung, 0o755), {"denied": 0}, "unlock the local stand-in"),
+    ])
+
+    # A DRM node exposed under another name (e.g. docker --device host:other-path) is
+    # still identified by its device number when the name is on a local filesystem.
+    def with_alternate_name(t):
+        t.device()
+        alias = t.root / "container-dev/gpu"
+        alias.parent.mkdir(parents=True)
+        alias.symlink_to("/dev/null")
+        t.client(target=alias)
+
+    # A FUSE mount on a lower mount stays in the table after a later local mount covers its
+    # parent directory. Its old path then belongs to the covering mount.
+    stack = t.root / "stack"
+
+    # A locked stand-in file next to the GPU alias shows whether the path is looked up:
+    # following it fails with EACCES (denied 1), identifying it by fdinfo does not (denied 0).
+    def with_stacked_mounts(t, covered):
+        t.device()
+        gpu = stack / "sub/gpu"
+        gpu.parent.mkdir(parents=True)
+        gpu.symlink_to("/dev/null")
+        lower = t.mount(stack, "ext4")
+        t.mount(stack / "sub", "fuse.sshfs", parent=lower)
+        if covered:
+            t.mount(stack, "ext4", parent=lower)
+        t.client(target=gpu)
+        (stack / "sub/locked").mkdir()
+        (t.proc / "100/fd/9").symlink_to(stack / "sub/locked/file")
+        t.write(t.proc / "100/fdinfo/9", "pos:\t0\nflags:\t0100002\nmnt_id:\t99\nino:\t7")
+        os.chmod(stack / "sub/locked", 0)
+
+    scenario(binary, t, "alternate name below a visible FUSE mount", [
+        (100, lambda t: with_stacked_mounts(t, False), {"incomplete": False, "clients": 1, "denied": 0},
+         "nothing below a visible FUSE mount is looked up, fdinfo identifies the client"),
+        (1100, lambda t: t.client(render=200000000, target=stack / "sub/gpu"),
+         {"incomplete": False, "usage": 20.0, "denied": 0}, "client below the FUSE mount supplies utilization"),
+        (2100, lambda t: os.chmod(stack / "sub/locked", 0o755), {"denied": 0}, "unlock the stand-in"),
+    ])
+    scenario(binary, t, "alternate name below a hidden FUSE mount", [
+        (100, lambda t: with_stacked_mounts(t, True), {"clients": 1, "memory": 1048576, "denied": 1},
+         "covering local mount owns the path, so it is looked up"),
+        (1100, lambda t: t.client(render=200000000, target=stack / "sub/gpu"),
+         {"usage": 20.0}, "hidden FUSE mount does not hide the client"),
+        (2100, lambda t: os.chmod(stack / "sub/locked", 0o755), {"denied": 0}, "unlock the stand-in"),
+    ])
+
+    # Paths that cannot be classified are identified by fdinfo instead of being dropped (finding 39).
+    def with_overlay_alias(t):
+        t.device()
+        layer = t.root / "overlay-root/dev"
+        layer.mkdir(parents=True)
+        (layer / "gpu").symlink_to("/dev/null")
+        t.mount(t.root / "overlay-root", "overlay")
+        t.client(target=layer / "gpu")
+
+    scenario(binary, t, "alternate name on an unlisted filesystem", [
+        (100, with_overlay_alias, {"incomplete": False, "clients": 1, "memory": 1048576}, "overlay alias is identified by fdinfo"),
+        (1100, lambda t: t.client(render=200000000, target=t.root / "overlay-root/dev/gpu"),
+         {"incomplete": False, "usage": 20.0}, "overlay alias supplies utilization"),
+    ])
+
+    def with_local_alias(t):
+        t.device()
+        alias = t.root / "local-alias/gpu"
+        alias.parent.mkdir(parents=True)
+        alias.symlink_to("/dev/null")
+        t.client(target=alias)
+
+    def drop_mount_table(t, render):
+        (t.proc / "self/mountinfo").unlink()
+        t.client(render=render, target=t.root / "local-alias/gpu")
+
+    def restore_mount_table(t, render):
+        t.write(t.proc / "self/mountinfo", "1 0 0:1 / / rw - ext4 /dev/root rw")
+        t.client(render=render, target=t.root / "local-alias/gpu")
+
+    scenario(binary, t, "known client while the mount table is unavailable", [
+        (100, with_local_alias, {"clients": 1}, "baseline with a mount table"),
+        (1100, lambda t: t.client(render=200000000, target=t.root / "local-alias/gpu"), {"usage": 20.0}, "interval with a mount table"),
+        (2100, lambda t: drop_mount_table(t, 500000000), {"incomplete": False, "clients": 1, "usage": 30.0, "memory": 1048576},
+         "no mount table: still counted, no false idle"),
+        (3100, lambda t: restore_mount_table(t, 600000000), {"incomplete": False, "usage": 10.0}, "mount table back, history kept"),
+    ])
+
+    scenario(binary, t, "DRM node under an alternate name", [
+        (100, with_alternate_name, {"incomplete": False, "clients": 1, "memory": 1048576}, "alternate name is the same client"),
+        (1100, lambda t: t.client(render=200000000, target=t.root / "container-dev/gpu"),
+         {"incomplete": False, "usage": 20.0}, "alternate name supplies utilization"),
+    ])
+
     def add_other_card(t):
         other = t.sys / "bus/pci/devices/0000:01:00.0"
         shutil.copytree(t.dev, other)
@@ -281,6 +420,7 @@ def fake_tests(binary, t):
 
     def xe(t):
         t.device("0x64a0", "xe")
+        t.write(t.dev / "power/autosuspend_delay_ms", 0)
         for idx, engines, freq in ((0, ("vcs",), 1300), (1, ("rcs", "ccs"), 800)):
             gt = t.dev / "tile0" / f"gt{idx}"
             for engine in engines:
@@ -312,6 +452,66 @@ def fake_tests(binary, t):
         (1100, lambda t: xe_client(t, 150, 1000), {"usage": None}, "busy advances during stall"),
         (2100, lambda t: xe_client(t, 150, 1100), {"usage": 50.0}, "catch-up counts busy work during stall"),
         (3100, lambda t: xe_client(t, 170, 1200), {"usage": 20.0}, "next interval counts only new work"),
+    ])
+
+    def throttle_start(t):
+        xe(t)
+        t.write(t.dev / "power/autosuspend_delay_ms", 1000)
+
+    def throttle_busy(t, busy, total, clock):
+        xe_client(t, busy, total, video=busy)
+        t.write(t.dev / "tile0/gt1/freq0/cur_freq", clock)
+
+    def guard_xe_reads(t):
+        for path in (t.dev / "tile0/gt1/freq0/cur_freq", t.proc / "100/fdinfo/3"):
+            path.unlink()
+            os.mkfifo(path)
+
+    def allow_xe_reads(t):
+        (t.dev / "tile0/gt1/freq0/cur_freq").unlink()
+        (t.proc / "100/fdinfo/3").unlink()
+        throttle_busy(t, 500, 3000, 1700)
+
+    scenario(binary, t, "Xe runtime PM sampling interval", [
+        (100, throttle_start, {"usage": None, "clock": 800}, "baseline"),
+        (600, lambda t: throttle_busy(t, 300, 1500, 1600),
+         {"usage": None, "video": None, "clock": 800}, "early refresh keeps previous counters and clock"),
+        (1150, lambda t: throttle_busy(t, 400, 2000, 1650),
+         {"usage": None, "video": None, "clock": 800}, "old 1050 ms interval falls inside the kernel timer slack"),
+        (1399, guard_xe_reads, {"usage": None, "video": None, "clock": 800}, "cached refresh skips clock and fdinfo FIFOs"),
+        (1400, allow_xe_reads,
+         {"usage": 20.0, "video": 25.0, "clock": 1700}, "refresh both reads with a full counter interval"),
+        (1450, lambda t: t.write(t.dev / "power/runtime_status", "suspending"),
+         {"status": "suspended", "usage": None, "clock": None}, "sleep clears the cache immediately"),
+        (1475, lambda t: t.write(t.dev / "power/runtime_status", "resuming"),
+         {"status": "suspended", "usage": None, "clock": None}, "Xe resuming still shows sleep"),
+        (1500, lambda t: (t.write(t.dev / "power/runtime_status", "active"), throttle_busy(t, 800, 4000, 1400)),
+         {"status": "active", "usage": None, "clock": 1400}, "wake takes a fresh baseline immediately"),
+        (1550, lambda t: (t.rename_card(), throttle_busy(t, 900, 4500, 1500)),
+         {"usage": None, "clock": 1500}, "device identity change discards cache and baseline"),
+        (1600, lambda t: (t.write(t.dev / "power/autosuspend_delay_ms", -1), throttle_busy(t, 950, 5000, 1550)),
+         {"usage": 10.0, "video": 10.0, "clock": 1550}, "disabled autosuspend allows fast reads"),
+        (1650, lambda t: (t.write(t.dev / "power/autosuspend_delay_ms", "1000 junk"), throttle_busy(t, 1050, 5500, 1600)),
+         {"usage": 10.0, "clock": 1550}, "malformed autosuspend delay uses the fallback interval"),
+        (1700, lambda t: (t.dev / "power/autosuspend_delay_ms").unlink(),
+         {"usage": 10.0, "clock": 1550}, "missing delay also uses the fallback interval"),
+        (1750, lambda t: t.write(t.dev / "power/autosuspend_delay_ms", 0),
+         {"usage": 20.0, "clock": 1600}, "immediate autosuspend permits fast reads"),
+        (2111, lambda t: (t.write(t.dev / "power/autosuspend_delay_ms", 250), throttle_busy(t, 1150, 6000, 1650)),
+         {"usage": 20.0, "clock": 1600}, "cache respects a shorter configured delay and its grace period"),
+        (2112, lambda t: throttle_busy(t, 1250, 6000, 1700),
+         {"usage": 40.0, "clock": 1700}, "shorter configured delay permits a fresh sample"),
+    ])
+
+    scenario(binary, t, "Xe power policy changes with a positive autosuspend delay", [
+        (100, throttle_start, {"clock": 800}, "baseline"),
+        (200, lambda t: (t.write(t.dev / "power/control", "on"), throttle_busy(t, 300, 2000, 1600)),
+         {"usage": 20.0, "clock": 1600}, "forced on takes a fresh sample"),
+        (300, lambda t: throttle_busy(t, 500, 3000, 1700),
+         {"usage": 20.0, "clock": 1700}, "forced on keeps sampling every refresh"),
+        (400, lambda t: (t.write(t.dev / "power/control", "auto"), throttle_busy(t, 600, 4000, 1800)),
+         {"usage": 20.0, "clock": 1700}, "return to auto holds the last sample"),
+        (1600, None, {"usage": 10.0, "clock": 1800}, "auto interval expires after the last forced-on read"),
     ])
 
     def compute_only(t):
@@ -400,6 +600,8 @@ def fake_tests(binary, t):
 
     scenario(binary, t, "sleep guard and wake baseline (clock FIFO would block if read)", [
         (100, asleep, {"status": "suspended", "clock": None, "memory": None, "procReadable": False}, "no dynamic reads while asleep"),
+        (600, lambda t: t.write(t.dev / "power/runtime_status", "resuming"),
+         {"status": "suspended", "clock": None, "memory": None, "procReadable": False}, "resuming skips dynamic reads"),
         (1100, wake, {"status": "active", "usage": None}, "wake baseline"),
         (2100, lambda t: t.client(render=100000000), {"usage": 10.0}, "awake interval"),
         (3100, lambda t: t.write(t.dev / "power/runtime_status", "suspending"), {"status": "suspended", "usage": None}, "suspending clears history"),
@@ -594,6 +796,121 @@ def fake_tests(binary, t):
     ])
 
 
+def process_column_test(work, t):
+    t.reset()
+    t.device(driver="xe")
+    t.client(fd=3, driver="xe")
+    blocked = t.proc / "100/fdinfo/3"
+    blocked.unlink()
+    os.mkfifo(blocked)
+    xe_binding = t.sys / "dev/char/1:3/device/driver"
+    xe_binding.parent.mkdir(parents=True)
+    xe_binding.symlink_to(t.sys / "bus/pci/drivers/xe")
+    # The same Xe node under an alternate name must be skipped as well.
+    alias = t.root / "container-dev/xe"
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to("/dev/null")
+    t.client(fd=5, driver="xe", target=alias)
+    alias_fifo = t.proc / "100/fdinfo/5"
+    alias_fifo.unlink()
+    os.mkfifo(alias_fifo)
+
+    def engine_time(fd, ns):
+        t.write(t.proc / f"100/fdinfo/{fd}", f"drm-client-id: {fd}\ndrm-engine-render: {ns} ns")
+
+    t.client(fd=4, driver="amdgpu", target="/dev/zero")
+    amd_binding = t.sys / "dev/char/1:5/device/driver"
+    amd_binding.parent.mkdir(parents=True)
+    amd_driver = t.sys / "bus/pci/drivers/amdgpu"
+    amd_driver.mkdir()
+    amd_binding.symlink_to(amd_driver)
+    engine_time(4, 10000000)
+
+    binary = work / "process-gpu"
+    build(binary, t.sys, t.proc, process_column=True)
+    sampler = Sampler(binary, t.proc / "100")
+    accounting = lambda ms: {k: v for k, v in sampler.sample(ms).items() if k != "mountinfo"}
+    try:
+        check("GPU_TIME counts AMD and skips both Xe fdinfo FIFOs", accounting(100)["time"] == 10000000)
+        (t.proc / "100/fd/5").unlink()
+        alias_fifo.unlink()
+        engine_time(4, 35000000)
+        check("GPU% retains mixed-device process activity", accounting(200) == {"time": 35000000, "percent": 25.0})
+        amd_binding.unlink()
+        engine_time(4, 75000000)
+        check("unknown driver metadata retains process accounting", accounting(300) == {"time": 75000000, "percent": 40.0})
+        xe_binding.unlink()
+        xe_binding.symlink_to(amd_driver)
+        blocked.unlink()
+        engine_time(3, 5000000)
+        check("a rebound node contributes immediately", accounting(400) == {"time": 80000000, "percent": 5.0})
+    finally:
+        rc, err = sampler.close()
+    check("process GPU reader clean exit (ASan/UBSan)", rc == 0 and not err.strip(), err[:500])
+
+
+def fallback_build_test(work, tree):
+    """Rerun the fixtures where optional calls are missing (findings 34 and 35)."""
+    shim = work / "no-at-config"
+    shim.mkdir(exist_ok=True)
+    (shim / "config.h").write_text(f'#include "{SRC}/config.h"\n#undef HAVE_OPENAT\n#undef HAVE_READLINKAT\n#undef HAVE_FSTATAT\n')
+    # Wrapping a symbol without defining the wrapper turns any remaining use into a link error.
+    # The harness wraps syscall() to reject statx with ENOSYS, and aborts if it is retried.
+    no_statx = ("-DINTELGPU_NO_STATX", "-Wl,--wrap=syscall", "-Wl,--wrap=statx")
+    # Headers without the statx system call number (finding 41): the sampler must not use it,
+    # and the injection harness must still build.
+    no_number = work / "no-statx-number-config"
+    no_number.mkdir(exist_ok=True)
+    (no_number / "config.h").write_text(f'#include "{SRC}/config.h"\n#include <sys/syscall.h>\n#undef SYS_statx\n')
+    variants = {
+        "statx rejected at runtime": no_statx,
+        "no openat, readlinkat, fstatat or statx": (f"-I{shim}", "-Wl,--wrap=readlinkat", "-Wl,--wrap=fstatat", *no_statx),
+        "headers without SYS_statx": (f"-I{no_number}", *no_statx),
+    }
+    for name, flags in variants.items():
+        binary = work / ("variant-" + name.split()[0].replace(",", ""))
+        try:
+            build(binary, tree.sys, tree.proc, extra=flags)
+            linked = True
+        except subprocess.CalledProcessError:
+            linked = False
+        check(f"{name}: links without the missing calls", linked)
+        if not linked:
+            continue
+        saved = list(failures)
+        failures.clear()
+        output = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(output):
+                fake_tests(binary, tree)
+            passed = not failures
+            detail = "; ".join(line for line in output.getvalue().splitlines() if "FAIL" in line)
+        except RuntimeError as error:  # the harness aborts when statx is retried
+            passed, detail = False, f"{error} after: {output.getvalue().splitlines()[-1:]}"
+        failures[:] = saved
+        check(f"{name}: fixture suite passes", passed, detail[:600])
+
+
+def mount_table_test(work, t):
+    """The Intel meters and the GPU% column share one mount table parse per refresh (finding 38)."""
+    t.reset()
+    t.start()
+    (t.sys / "bus/pci/drivers/xe").mkdir(parents=True, exist_ok=True)
+    data = t.root / "data.txt"
+    data.write_text("not a device")
+    (t.proc / "100/fd/6").symlink_to(data)
+    t.write(t.proc / "100/fdinfo/6", "pos:\t0\nflags:\t0100002\nmnt_id:\t1\nino:\t2")
+    binary = work / "process-gpu-intel"
+    build(binary, t.sys, t.proc, process_column=True)
+    sampler = Sampler(binary, t.proc / "100", "intel")
+    try:
+        opens = [sampler.sample(ms)["mountinfo"] for ms in (100, 1100, 2100)]
+    finally:
+        rc, err = sampler.close()
+    check("Intel meters and GPU% share one mount table parse per refresh", opens == [1, 1, 1], str(opens))
+    check("shared mount table clean exit (ASan/UBSan)", rc == 0 and not err.strip(), err[:500])
+
+
 def negative_controls(work, tree):
     original = (SRC / "linux/IntelGPU.c").read_text()
     mutations = {
@@ -601,6 +918,12 @@ def negative_controls(work, tree):
         "fork deduplication": ('IntelGPU_observe(&observation);',
                                'observation.id ^= strtoull(process->d_name, NULL, 10) << 32; IntelGPU_observe(&observation);'),
         "dual-video capacity": ('elapsed * current->capacity[e] * INTELGPU_ACCOUNTING_SLACK', 'elapsed * INTELGPU_ACCOUNTING_SLACK'),
+        "local filesystem allowlist": ('if (String_eq(type, local[i]))', 'if (String_eq(type, local[i]) || true)'),
+        "stacked mounts": ('mount = IntelGPU_topmost(child);', 'mount = child;'),
+        "alternate DRM names": ('bool lookUp = String_startsWith(target, INTELGPU_DRM_PREFIX) || IntelGPU_localPath(target, monotonicMs);',
+                                'bool lookUp = String_startsWith(target, INTELGPU_DRM_PREFIX) || (IntelGPU_localPath(target, monotonicMs) && false);'),
+        "fdinfo identity for unclassified paths": ('   if (!lookUp)\n      return INTELGPU_FD_UNCLASSIFIED;',
+                                                   '   if (!lookUp)\n      return INTELGPU_FD_OTHER;'),
     }
     for name, (old, new) in mutations.items():
         assert original.count(old) == 1, name
@@ -632,6 +955,13 @@ def graphics_work_on_device(pid, pci):
             if value and value[0].isdigit() and int(value[0]) > 0:
                 return True
     return False
+
+
+def workload_error(name, stderr):
+    if name == "graphics":
+        xe_warning = "MESA: warning: Support for this platform is experimental with Xe KMD, bug reports may be ignored."
+        stderr = "\n".join(line for line in stderr.splitlines() if line.strip() != xe_warning)
+    return stderr.strip()
 
 
 def live_tests(binary, work):
@@ -678,7 +1008,8 @@ def live_tests(binary, work):
             if p.poll() is None:
                 p.kill()
                 p.communicate()
-        check(f"Intel {name} workload succeeds", p.returncode == 0 and not err.strip(), err[:600])
+        err = workload_error(name, err)
+        check(f"Intel {name} workload succeeds", p.returncode == 0 and not err, f"rc={p.returncode} {err[:600]}")
         key = "usage" if name == "graphics" else "video"
         if name == "graphics":
             check("FFmpeg recorded graphics work on the selected PCI device", graphics_on_target)
@@ -702,6 +1033,14 @@ def main():
         fake = work / "intel-fake"
         build(fake, tree.sys, tree.proc)
         fake_tests(fake, tree)
+        process_column_test(work, tree)
+        fallback_build_test(work, tree)
+        mount_table_test(work, tree)
+        warning = "MESA: warning: Support for this platform is experimental with Xe KMD, bug reports may be ignored."
+        check("ignore the exact Xe warning for the graphics workload", not workload_error("graphics", warning))
+        check("keep FFmpeg errors alongside the Xe warning", workload_error("graphics", warning + "\nDevice lost") == "Device lost")
+        check("keep other Mesa warnings", workload_error("graphics", "MESA: warning: Device lost"))
+        check("keep warnings from the video workloads", workload_error("encode", warning))
         if args.mutations:
             negative_controls(work, tree)
         if not args.fake_only:

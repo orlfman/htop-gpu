@@ -57,7 +57,11 @@ All of them work like normal htop meters. You add them in F2 Setup and can show 
 
 Partly. The AMD meters should work on any dedicated RX 6000, RX 7000 or RX 9000 card (RDNA 2, 3 and 4, and their Radeon Pro versions), and the heading shows that card's name. I only own an RX 9070 XT though, so the other cards are tested against made up copies of what the kernel driver reports, not on real hardware. If you try it on one, I'd like to hear how it goes. Integrated Radeon graphics and older cards show N/A.
 
-The Intel meters recognize Tiger Lake and Rocket Lake integrated graphics (11th-gen Core), Alder Lake (12th-gen Core), Raptor Lake and its refresh, plus the Meteor, Arrow, Lunar, Panther, Wildcat and Nova Lake families listed in the Linux 7.3 PCI IDs. They support both `i915` and `xe`. The sampler picks the supported iGPU with the lowest PCI address and reads the metrics its driver exposes. Intel Arc desktop and laptop discrete GPUs are excluded. Live testing used a Core Ultra 7 270K Plus on `i915`; the other families and `xe` have simulated test coverage.
+The Intel meters recognize Tiger Lake and Rocket Lake integrated graphics (11th-gen Core), Alder Lake (12th-gen Core), Raptor Lake and its refresh, plus the Meteor, Arrow, Lunar, Panther, Wildcat and Nova Lake families listed in the Linux 7.3 PCI IDs. They support both `i915` and `xe`. The sampler picks the supported iGPU with the lowest PCI address and reads the metrics its driver exposes. Intel Arc desktop and laptop discrete GPUs are excluded. Live testing used a Core Ultra 7 270K Plus on both `i915` and `xe`. The other families have simulated test coverage.
+
+The Xe meters check for sleep on every refresh. When runtime power management is automatic, they reuse readings between hardware samples so the iGPU has time to suspend. A 1 s autosuspend delay gives a 1.3 s minimum between samples while continuously active. Setting the device's power policy to `on` keeps it awake and allows fresh readings every refresh.
+
+The `GPU%` and `GPU_TIME` process columns and the generic GPU meter use engine time in nanoseconds. Xe reports engine cycles, so the working-tree process reader skips Xe descriptors and continues accounting for other GPUs held by the same process. The Intel header meters use Xe's cycle counters.
 
 The CPU power meter needs to read the RAPL energy counter, which Linux keeps root only by default. I made mine readable with this udev rule in `/etc/udev/rules.d/99-rapl-read.rules`:
 

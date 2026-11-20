@@ -1,7 +1,7 @@
 From c3a0d73ce3fc803285e6579da6bcf5e1c1a95800 Mon Sep 17 00:00:00 2001
 From: orlfman <25542856+orlfman@users.noreply.github.com>
 Date: Thu, 19 Nov 2026 13:16:01 -0700
-Subject: [PATCH 16/16] linux: extend Intel integrated graphics support
+Subject: [PATCH 16/17] linux: extend Intel integrated graphics support
 
 The Intel sampler only accepted the Arrow Lake iGPU (8086:7d67) on
 i915. Accept the 109 integrated graphics IDs that Linux 7.3 lists for

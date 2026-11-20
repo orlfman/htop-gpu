@@ -1,6 +1,6 @@
 # htop-gpu audit findings
 
-Original audit: 2026-10-28 (America/Phoenix). Latest full project audit: 2026-11-11 (Codex). Latest audit: 2026-11-19 (Claude Code, finding 24 in the Intel descriptor scan, subsequently fixed and verified by Codex).
+Original audit: 2026-10-28 (America/Phoenix). Latest full project audit: 2026-11-11 (Codex). Latest audit: 2026-11-19 (Claude Code, findings 39–41 fixed and verified).
 Auditors: Codex and Claude Code. Newest sections are at the top; the 2026-10-28 audit and older follow-ups start at "Scope and baseline".
 Status: findings 1-6 are resolved and validated; finding 6 is committed (`6c06d243`) and retained in installed `htop-gpu 3.5.3-12`, which labels CPU power Pwr. Finding 7 (P3) is deferred at the user's request. Finding 8 (P2, Intel client access loss reported as zero) is fixed and validated in 3.5.3-12; see the fix validation below.
 Findings 9-13 (P3, heading meters, Claude Code self-audit 2026-10-29): 9, 10, 11 and 13 are fixed (htop `44265679`, `798d8cfa`; installed in 3.5.3-13), 12 is accepted; see the last two sections.
@@ -10,7 +10,462 @@ Findings 17-19 (P2/P3, AMD runtime power state, upstream checker, display-mode d
 Findings 20-22 (P2/P3, Xe timestamp stalls, compute-only Xe, live Vulkan device) are fixed and verified (htop `c3a0d73c`, installed in 3.5.3-17 on 2026-11-19).
 Finding 23 (P2, generic-only fdinfo on a matched Intel GPU descriptor produces false zeros) is fixed and verified (htop `c3a0d73c`, 3.5.3-17).
 Finding 24 (P3, an O_PATH handle on the iGPU node makes usage and video N/A after the finding 23 fix; Claude Code, 2026-11-19) is fixed and verified (htop `c3a0d73c`, 3.5.3-17).
+Findings 25-26 (P3, first live xe run on 2026-11-19: refreshes faster than xe's 1 s autosuspend keep an idle iGPU awake; the live graphics check fails on Mesa's xe warning) are fixed and verified in htop `1c205705` (3.5.3-18). Independently re-verified live on xe by Claude Code.
+Finding 27 (P3, Intel meters showed N/A during runtime resume) is fixed and verified in htop `1c205705` (3.5.3-18). Independently re-verified live on xe by Claude Code.
+Finding 28 (P3, fast Xe polling could keep the iGPU awake during autosuspend timer slack) is fixed and verified in htop `1c205705` (3.5.3-18).
+Findings 29–31 are fixed and verified in htop `1c205705` (3.5.3-18). They cover the GPU% process reader, forced-on Xe power policy, and detection of hardware reads during cached refreshes. Findings 28–31 independently re-verified live on xe by Claude Code.
+Finding 32 (P3, `stat()` through `/proc/<pid>/fd/N` reaches each descriptor's own filesystem, so a hung network or FUSE mount could block htop; in the Intel sampler since the start, and now in the GPU% path) is fixed and verified in htop `1c205705` (3.5.3-18, Claude Code).
+Findings 33–34 (alternate DRM node paths and optional syscall support) are fixed and verified in htop `1c205705` (3.5.3-18, Claude Code).
+The original 33–34 reproductions also pass independently. Findings 35–38 from the follow-up audit are fixed and verified in htop `1c205705` (3.5.3-18, Claude Code).
+Independent retesting confirmed fixes 35–38. Findings 39–41 are fixed and verified in htop `1c205705` (3.5.3-18, Claude Code).
 P2 means normal priority; P3 means low priority.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — fixes for findings 39–41
+
+The user asked me to go straight to fixing findings I verify. Fixed in the uncommitted working tree over htop `c3a0d73c`, still booted on xe.
+
+Kernel check first. A subagent read `fs/proc/fd.c`, `fs/fuse/file.c`, `fs/nfs/file.c`, `fs/smb/client/cifsfs.c` and `fs/locks.c` at gregkh v7.3.4. `seq_show()` (fdinfo) prints `pos`, `flags`, `mnt_id` and `ino` from in-memory fields, lists locks with `show_fd_locks()` (in-memory lock lists), and calls `f_op->show_fdinfo` only if defined. None of the FUSE, NFS or SMB file operations define it. Parts of the FUSE, SMB and locks files came from a summary, not verbatim text. So reading fdinfo does not reach the file's filesystem.
+
+`linux/IntelGPU.c`:
+
+- 39: `IntelGPU_fdDevice()` now returns `IntelGPUFdKind`: other, denied, device, or unclassified. A path that is neither under `/dev/dri/` nor on a resolvable local mount is unclassified and never looked up, and neither is an over-long link text. `IntelGPU_readClients()` reads the fdinfo of unclassified descriptors, and `IntelGPU_parse(…, unclassified)` treats a record without `drm-` keys as not a client. A record with DRM keys goes through the driver/PCI filter and the finding 23 rules as before. An unreadable unclassified fdinfo only blocks a known client (`IntelGPU_blockClient()`) and does not mark the whole scan incomplete. A client under an alternate name on `overlay`, below a visible FUSE mount, or with no mount table, is now counted. `IntelGPU_isXeFd()` treats unclassified descriptors as not xe, so GPU% keeps upstream behavior for them, because reading their fdinfo is the wake the filter avoids. `IntelGPU_drmFile()` was replaced by `IntelGPU_ownNode()`.
+- 40: the visible root mount index is computed once per parse (`mountRoot`), and `IntelGPU_localPath()` first collects the candidate mounts whose mount point is the path or one of its leading directories (one pass, stored lengths). `IntelGPU_childAt()` only scans those candidates. Resolver-only benchmark, `-O2`, median of three runs of 1,000 lookups of a 7-component local path: before 1.07 / 5.64 / 21.82 ms and after 0.25 / 1.22 / 4.25 ms, for 100 / 500 / 2,000 mounts. That matches Codex's numbers for the pre-35 resolver.
+- 41: the harness's `__wrap_syscall` uses `SYS_statx` only when it is defined and aborts on any other call. A copy of the old wrapper failed to compile on a `config.h` shim that undefines `SYS_statx` ("`SYS_statx` undeclared").
+
+`tools/test-intel-gpu.py`:
+
+- The stacked-mount scenarios now use a locked stand-in next to the alias to show whether the path is looked up (`denied` 1) or identified by fdinfo (`denied` 0). Visible FUSE: not looked up, client counted, 20%. Hidden FUSE under a covering ext4: looked up, client counted, 20%.
+- New: an alternate name on `overlay` is counted (1 MiB, 20%). A known client keeps counting while `mountinfo` is missing (30%, `incomplete=false`) and keeps its history when it returns (10%).
+- Third fallback variant, "headers without SYS_statx".
+- Negative controls: "fdinfo identity for unclassified paths" is new, and "alternate DRM names" was updated.
+
+Checks:
+
+- Build: no warnings. STYLE OK, `test-check-style.sh` ALL PASSED, `git diff --check` clean in both repos.
+- `test-intel-gpu.py --mutations` with the live part on xe: 323 ok, ALL PASSED, all seven negative controls caught, all three fallback variants link and pass, shared parse holds. Live peaks: encode 32.2%, decode 31.3%, graphics 100%. `test-sampler.py`: 198 ok, ALL PASSED.
+- End to end, the real htop from the working tree with the user's layout plus GPU% at `delay=1`, alternating 20 s windows: no htop 20.3% and 20.9% awake, htop 28.0% and 25.2%. The Intel heading was shown, and the user's config hash was unchanged.
+
+Findings 39–41 are resolved.
+
+Limits:
+
+- A really hung network mount was not reproduced; the claim that fdinfo is safe rests on the kernel source read above.
+- In GPU%, an xe node under an unclassifiable name (such as `overlay`) is still read by upstream's reader, which can wake the iGPU: power only, and rare.
+- Unclassified descriptors (files on `/proc`, `/sys`, overlay, network and FUSE mounts) now cost one fdinfo read each per Intel scan.
+
+Notes: still uncommitted and not packaged, together with findings 25–38. It needs a new htop commit after `c3a0d73c`, patch 0017 and pkgrel 18.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — confirmation of findings 39–41
+
+I checked each against my finding 35–38 code and agree with all three:
+
+- 39: `IntelGPU_fdDevice()` returns false for a path it cannot classify (no readable mount table, or a type outside the allowlist such as `overlay`) without signalling "unknown". `IntelGPU_readClients()` then treats a known client's descriptor as gone, and only `denied` blocks a client (`IntelGPU_blockClient()`).
+- 40: `IntelGPU_localPath()` calls `IntelGPU_childAt()` for every path component, and each call scans the whole table.
+- 41: `tools/intel-gpu-sample.c` uses `SYS_statx` unguarded under `INTELGPU_NO_STATX`.
+
+Proposed fixes:
+
+- 39: give the Intel sampler a third outcome, "unclassified", for a path it cannot classify. It then identifies the descriptor from its fdinfo instead of a target lookup. fdinfo is built from the kernel's open-file bookkeeping; I believe NFS, SMB and FUSE define no `show_fdinfo`, to be confirmed in the 7.3 source before relying on it. The parse treats a record with no `drm-` keys as not a client, and a record with DRM keys as before (driver/PCI filter, finding 23 semantics). A client under an alternate name on `overlay`, or with no mount table, is then counted rather than dropped. Codex's simpler alternative, blocking only known clients, would still miss a descriptor that was never classifiable. The GPU% xe filter keeps upstream behavior for unclassified paths, because reading xe fdinfo is the wake it avoids: a possible extra wake in a rare setup, no wrong data.
+- 40: per lookup, first collect the mounts whose mount point is a leading component prefix of the path (one pass), then resolve parentage among those candidates only.
+- 41: guard the harness wrapper's `SYS_statx` use, and keep `abort()` for any other system call.
+
+## 2026-11-19, Codex — audit of Claude's fixes for findings 35–38
+
+Audited the uncommitted working tree over htop `c3a0d73c`. The existing reproductions now pass. The sampler links without the libc statx symbol and keeps working after ENOSYS. A separate combined-reader harness returned EPERM on the first raw statx call, rejected a second call, and completed three scans. Visible and covered FUSE fixtures classified as expected, and the BeeGFS fixture was skipped. The original combined-reader trace now shows three opens of mountinfo in three shared refreshes.
+
+### 39 (P2) — unknown mount information makes a known busy client look idle
+
+When mountinfo cannot be loaded, the nonstandard path is rejected at `linux/IntelGPU.c:792` without setting `denied`. The scanner treats that result as a disappeared descriptor and removes its accounting history. In a stateful fixture the same GPU descriptor reported 20% usage and 1 MiB, then zero clients, 0% usage and zero bytes with `incomplete=false` during one refresh without a mount table. After restoration the next refresh had no usage rate while the baseline rebuilt. A separate fixture classified the same alternate device as ext4, overlay, and tmpfs. Both recognized local types reported 20% and 1 MiB. The overlay classification reported the same false idle values as the missing-table case. Preserve incomplete coverage for known clients when the mount check cannot classify the descriptor. These cases used simulated procfs and mount tables.
+
+### 40 (P3) — the mount resolver scans the entire table at every path component
+
+`IntelGPU_localPath()` calls `IntelGPU_childAt()` for each component of every candidate path. Each call scans all mounts even when no mountpoint could match. In a resolver-only benchmark of ordinary local paths, medians for 1,000 lookups were 1.17 ms with 100 synthetic mounts, 4.99 ms with 500 mounts, and 20.63 ms with 2,000 mounts. The previous resolver took 0.22, 0.93, and 4.30 ms respectively. The comparison used optimized builds and three runs per size. It measures mount resolution without descriptor I/O or terminal rendering. Indexing the parsed table by parent ID and mountpoint would preserve the parentage result and avoid repeated full scans.
+
+### 41 (P3) — the fallback test requires the syscall number it simulates as missing
+
+`tools/intel-gpu-sample.c:23` uses `SYS_statx` without a feature guard whenever `INTELGPU_NO_STATX` is defined. With that one macro removed in a temporary header shim, the production sampler built and reported 20% for the fixture while the fallback test variant failed to compile. Guard the injection harness as well as the production call so the suite can exercise the path-only build on those headers.
+
+The htop rebuild completed without warnings. Style and all seven checker self-tests passed. The Intel suite passed 309 checks, including live Xe workloads and six mutation controls. The AMD suite passed 198 checks. On the active Xe desktop with a 1,000 ms autosuspend delay, one 15-second window per layout at a 0.1 s refresh gave 30.0% awake with neither feature, 29.1% with GPU% only, 25.2% with Intel headers only, and 33.2% with both. No persistent wake was observed. No hung filesystems were tested. Installed package is 3.5.3-17. This turn edited only audit records.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — fixes for findings 35–38
+
+Fixed at the user's request, in the uncommitted working tree over htop `c3a0d73c`, still booted on xe.
+
+`linux/IntelGPU.c`:
+
+- 35: `IntelGPU_lookupDevice()` now calls `statx` through `syscall(SYS_statx, …)` when `SYS_statx`, `STATX_TYPE` and `AT_STATX_DONT_SYNC` are defined, so no libc `statx()` symbol is needed. On `ENOSYS` or `EPERM` it remembers that `statx` is missing and uses `fstatat()` (or `stat()` without it) from then on, instead of dropping the client. Added `<sys/syscall.h>`.
+- 36: the mount table now keeps mount and parent IDs. `IntelGPU_localPath()` resolves a path the way a path walk does. It starts at the root mount (the `/` entry whose parent is not in the table), follows mounts stacked on the same place to the visible one (`IntelGPU_topmost()`), and at each leading directory enters the last child of the current mount at that point (`IntelGPU_childAt()`). Mounts hidden under a later mount are never reached. An unreadable or unresolvable table counts as not local.
+- 37: `IntelGPU_localType()` is an allowlist (`devtmpfs`, `tmpfs`, `ramfs`, `ext2/3/4`, `xfs`, `btrfs`, `f2fs`, `bcachefs`, `zfs`, `jfs`, `nilfs2`, `vfat`, `exfat`, `ntfs3`). Every other type, including unlisted network filesystems and `proc`/`sysfs`, is skipped.
+- 38: `IntelGPU_loadMounts(monotonicMs)` parses once per refresh timestamp, and the Intel meters and the GPU% filter share it. `IntelGPU_fdDevice()` and `IntelGPU_drmFile()` take `monotonicMs`, and the two `mountsLoaded = false` resets are gone.
+- Live classification on this desktop: `/`, `/home`, `/mnt/storage1`, `/mnt/games0`, `/run/user/1000`, `/tmp` and `/dev/dri` are local. The FUSE document portal `/run/user/1000/doc`, `/proc` and `/sys` are skipped. A second lookup in the same refresh reused the parse.
+
+Tests:
+
+- `tools/intel-gpu-sample.c`: with `-DINTELGPU_NO_STATX -Wl,--wrap=syscall` it answers `SYS_statx` with `ENOSYS` and aborts on a second attempt in the same process.
+- `tools/process-gpu-sample.c`: with a second argument `intel`, it runs `IntelGPU_getSample()` in the same refresh before `GPU_readProcessData()`, as htop does. It counts `/self/mountinfo` opens per refresh through `--wrap=fopen` and reports them as `mountinfo`.
+- `tools/test-intel-gpu.py`:
+  - Fake mount rows now carry IDs and parents (`Tree.mount(path, fstype, parent)`).
+  - New scenarios: an unlisted network filesystem (`beegfs`) is skipped; an alternate name below a visible FUSE mount is skipped; the same path below a FUSE mount hidden by a covering ext4 mount is found (one client, 1 MiB, 20% usage).
+  - `fallback_build_test()` now runs two variants and reports a harness crash as a failure. "statx rejected at runtime" uses the normal config, `NO_STATX` and `--wrap=statx`. "no openat, readlinkat, fstatat or statx" adds the shim `config.h` and `--wrap=readlinkat --wrap=fstatat`.
+  - New `mount_table_test()` expects exactly one mount table open per refresh with both readers running.
+  - Process-column checks ignore the new `mountinfo` key.
+  - Negative controls: "local filesystem allowlist" and "stacked mounts" are new; "alternate DRM names" was updated; "network and FUSE skip" was replaced.
+
+Checks:
+
+- Build: no warnings. STYLE OK, `test-check-style.sh` ALL PASSED, `git diff --check` clean in both repos.
+- `test-intel-gpu.py --mutations` with the live part on xe: 309 ok, ALL PASSED, all six negative controls caught, both fallback variants link and pass, shared parse confirmed. Live peaks: encode 32.1%, decode 17.9%, graphics 100%. `test-sampler.py`: 198 ok, ALL PASSED.
+- Proof runs on mutated copies (the real file untouched): removing the ENOSYS fallback failed both fallback variants (dropped client, then the abort); keeping the fallback but retrying `statx` failed both on the abort; removing the per-refresh cache gave `[2, 2, 2]` opens and failed the shared-table check. The unmodified source passed all of them.
+- End to end with the real htop from the working tree, the user's layout plus GPU% at `delay=1`, alternating 20 s windows: no htop 23.1% and 23.0% awake, htop 25.7% and 26.8%. The Intel heading was shown.
+
+Findings 35–38 are resolved.
+
+Limits:
+
+- A really hung network mount was not reproduced.
+- Paths from another mount namespace are still resolved against htop's own table. Their lookup keeps `AT_STATX_DONT_SYNC`, which is weaker on SMB, and falls back to plain `stat` where `statx` is missing.
+- Mount-ID resolution was tested with fake tables, plus a live classification of this desktop's real table.
+
+Notes: still uncommitted and not packaged, together with findings 25–34. It needs a new htop commit after `c3a0d73c`, patch 0017 and pkgrel 18.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — confirmation of findings 35–38
+
+I checked each against my finding 33–34 code and agree with all four:
+
+- 35: `IntelGPU_lookupDevice()` selects `statx()` on `#ifdef STATX_TYPE`. That macro comes from the kernel headers (`<linux/stat.h>`, included explicitly), so an older libc without `statx()` fails to link. A runtime `ENOSYS` (an old kernel, or a seccomp profile) makes the lookup return false, which silently drops every client: a false zero marked complete.
+- 36: `IntelGPU_localPath()` chooses the longest mount-point string and ignores mount IDs and parents, so a hidden child mount can claim a visible path.
+- 37: `IntelGPU_remoteType()` is a denylist, so unlisted network filesystems (BeeGFS, as Codex notes) count as local.
+- 38: `mountsLoaded` is cleared both in `IntelGPU_readClients()` and on each new `monotonicMs` in `IntelGPU_isXeFd()`, so one refresh can parse mountinfo twice.
+
+Proposed fixes:
+
+- 35: use the raw `SYS_statx` system call (no libc symbol). On `ENOSYS`/`EPERM`, fall back to `fstatat()`/`stat()` and remember that `statx` is unavailable. Simulate that in the fallback-build test.
+- 36: resolve the path by walking mount parentage from the root mount, following stacked mounts and descending into the topmost child mounted at each path prefix. An unresolvable table counts as unknown and is skipped.
+- 37: switch to an allowlist of local types (`devtmpfs`, `tmpfs`, `ramfs`, `ext2/3/4`, `xfs`, `btrfs`, `f2fs`, `bcachefs`, `zfs`, `jfs`, `nilfs2`, `vfat`, `exfat`, `ntfs3`). Container `/dev` directories are `tmpfs`, so finding 33 stays fixed.
+- 38: key the parsed table to the refresh `monotonicMs`, so both readers share one parse.
+
+## 2026-11-19, Codex — audit of Claude's fixes for findings 33–34
+
+Retested the uncommitted working tree over htop `c3a0d73c`. Finding 33's original reproduction now reports one client, 20% usage and 1 MiB for both the usual render-node name and an alternate local name using the production prefix. An inotify watch confirmed the generic GPU reader skipped the Xe fdinfo under both names. For finding 34, a separate build disabled openat, fstatat and readlinkat and made the latter two symbols unavailable to the linker. All five mixed-device process-reader checks passed, including the alternate-name Xe FIFO, AMD counters and rebinding.
+
+### 35 (P2) — unavailable statx silently drops every GPU client
+
+At `linux/IntelGPU.c:682`, the kernel header's `STATX_TYPE` macro selects a direct libc call. It does not establish that libc provides the symbol or that the call works at runtime. With working statx the fixture reported one client, 20% usage and 1 MiB. When the API returned ENOSYS, the same input produced zero clients, 0% usage and zero bytes with `incomplete=false`. With current headers but the statx symbol unavailable at link time, the sampler did not link. Both cases were simulated on the current toolchain. The new no-*at test still uses statx on this host. Probe the function at build time and exercise an unavailable-at-runtime case, retaining mount eligibility checks before using the supported fallback.
+
+### 36 (P3) — a hidden child mount can hide a visible local GPU from the meters
+
+`IntelGPU_localPath()` selects the longest mountpoint string across all rows. It discards the mount and parent IDs. In a fixture a second local mount covered a parent directory that had a FUSE child on the lower mount. The visible local GPU was below the child's old pathname. Without the hidden child row the sampler reported 20% usage and 1 MiB. Adding that row alone produced zero clients, usage and memory with complete coverage reported. Consider parentage and mount visibility when resolving stacked mounts. This was a simulated mount table in a single namespace. [Linux mountinfo semantics](https://man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html)
+
+### 37 (P3) — unrecognized network filesystems are classified as local
+
+The default return in `IntelGPU_remoteType()` marks every unlisted filesystem as local. An isolated classifier check returned local for ext4 and BeeGFS and remote for fuse.sshfs. BeeGFS is a network filesystem with metadata servers, so this permits the target attribute lookup that finding 32 intended to skip. Treat unknown filesystem types conservatively when admitting alternate paths. This was a classification test only. No BeeGFS installation, server contact or actual stall was tested. [BeeGFS architecture](https://doc.beegfs.io/latest/architecture/overview.html)
+
+### 38 (P3) — both readers can reload mountinfo in one refresh
+
+The Intel client scan and the generic Xe process scan each independently clear `mountsLoaded`. A trace of three shared timestamps with both real reader functions scanning and the device active showed six opens of mountinfo. Each load also frees and recreates the mountpoint strings. Key the shared table to the refresh timestamp so both consumers reuse one parse. The trace measured duplicate work, not a desktop CPU slowdown.
+
+The development binary rebuilt without warnings. Style and all seven checker self-tests passed. The Intel suite passed 296 checks, including live Xe workloads and five mutation controls. The AMD suite passed 198 checks. At a 0.1 s refresh on the live Xe desktop, one 15 s window per layout gave 28.2% awake with neither feature, 38.9% with GPU% only, 33.0% with Intel headers only and 34.9% with both. No continuous wake was observed. Installed package is 3.5.3-17. Only audit records were edited.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — fixes for findings 33 and 34
+
+Fixed at the user's request, in the uncommitted working tree over htop `c3a0d73c`, still booted on xe. This replaces my finding 32 helper `IntelGPU_drmLinkStat()`.
+
+Kernel check first. A subagent read `fs/fuse/dir.c`, `fs/nfs/inode.c` and `fs/smb/client/inode.c` at gregkh v7.3.4. `statx(AT_STATX_DONT_SYNC)` with only `STATX_TYPE` skips server or daemon traffic in `fuse_getattr()` and `nfs_getattr()`. `cifs_getattr()` still revalidates when the inode's cached `time` is 0. Path-walk revalidation is outside those functions. So `DONT_SYNC` alone cannot guarantee a hung mount is never queried, and the fix does not rely on it.
+
+`linux/IntelGPU.c`, new `IntelGPU_fdDevice()`. Every step but the last avoids the target filesystem:
+
+1. `readlinkat()` the `/proc` fd link, or `readlink()` on the path in builds without it.
+2. Link texts that are not absolute paths (`socket:[…]`, `pipe:[…]`, `anon_inode:…`) are never devices and are skipped.
+3. Paths under `INTELGPU_DRM_PREFIX` (`/dev/dri/`) are looked up directly.
+4. Any other path is matched against htop's own mount table (`/proc/self/mountinfo`, parsed lazily once per refresh, octal escapes decoded, longest and latest mount point wins). It is skipped when that filesystem is network or FUSE (`nfs*`, `cifs`, `smb3`, `smbfs`, `9p`, `ceph`, `afs`, `coda`, `lustre`, `glusterfs`, `virtiofs`, `orangefs`, `ncpfs`, `fuse*`) or when the table cannot be read. Otherwise it is looked up, so a DRM node under another name (for example `docker --device host:other-path`) is found by its device number again (33). On this desktop, `/`, `/home`, `/tmp`, `/mnt/storage1` and `/dev/dri` classify as local and the document portal `/run/user/1000/doc` (FUSE) as remote.
+5. The lookup uses `statx(..., AT_STATX_DONT_SYNC, STATX_TYPE)` when available, as an extra guard for paths from other mount namespaces. Otherwise it uses `fstatat()`, or `stat()` in builds without it. The device number comes from the result.
+
+Builds without `readlinkat`/`fstatat`/`openat` reach a directory-relative link through `/proc/self/fd/<dir>/<name>` (34). `IntelGPU_drmFile()` and `IntelGPU_isXeFd()` both use the helper and now carry a `dev_t`. Added `<linux/stat.h>` (IWYU, `statx`).
+
+`tools/test-intel-gpu.py`:
+
+- Every fake tree gets `proc/self/mountinfo` (root ext4), and `Tree.mount()` adds entries.
+- The hung-mount stand-in is now a `fuse.sshfs` mount (skipped, `denied` 0). The same locked path on ext4 is looked up (`denied` 1).
+- New "DRM node under an alternate name" scenario: one client, 1 MiB, 20% usage.
+- The process-column fixture adds an alternate-name xe node whose fdinfo is a FIFO, and it must be skipped.
+- New `fallback_build_test()` compiles with a shim `config.h` that undefines `HAVE_OPENAT`, `HAVE_READLINKAT` and `HAVE_FSTATAT`, and links with `--wrap=readlinkat --wrap=fstatat` without wrappers, so any direct use fails to link. It then runs the full fixture suite. A one-line probe confirmed the wrap trick fails on a direct `readlinkat()` call.
+- Negative controls: "network and FUSE skip" and "alternate DRM names" replace "DRM link filter".
+
+Checks:
+
+- Build: no warnings. STYLE OK, `test-check-style.sh` ALL PASSED, `git diff --check` clean in both repos.
+- `test-intel-gpu.py --mutations` with the live part on xe: 296 ok, ALL PASSED, all five negative controls caught, fallback build links and passes. Live peaks: encode 32.5%, decode 32.5%, graphics 100%. `test-sampler.py`: 198 ok, ALL PASSED.
+- End to end, the real htop from the working tree with the user's layout plus GPU% at `delay=1`, alternating 20 s windows: no htop 22.0% and 22.4% awake, htop 24.2% and 27.5%. The Intel heading was shown in both runs.
+
+Findings 33 and 34 are resolved.
+
+Limits:
+
+- A really hung NFS, SMB or FUSE mount was not reproduced.
+- A path from another mount namespace whose prefix looks local in htop's namespace is still looked up, guarded only by `AT_STATX_DONT_SYNC`, which is weaker on SMB per the kernel check.
+- The process-column reader was not re-run in a no-`openat` build; the Intel sampler compiled it there, but did not execute that branch.
+
+Notes: still uncommitted and not packaged, together with findings 25–32. It needs a new htop commit after `c3a0d73c`, patch 0017 and pkgrel 18.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — confirmation of findings 33 and 34
+
+I reviewed both against my finding 32 code and agree with both.
+
+- 34: `IntelGPU_drmLinkStat()` calls `readlinkat()` and `fstatat()` directly. `linux/Compat.h` provides `Compat_readlinkat()` and `Compat_fstatat()` with path-based fallbacks for builds without `HAVE_READLINKAT` / `HAVE_FSTATAT` / `HAVE_OPENAT`. This build defines all three, so it is unaffected, but the fallback configuration cannot link.
+- 33: the prefix test runs before the device-number test, so a DRM node that procfs reports outside `/dev/dri/` (a container `--device host:other-path` mapping) is rejected without a device check. That is a silent client loss in the Intel sampler, and a missed xe skip in the GPU% path. The checks were my own design; the test fixtures only used `/dev/`-prefixed targets, so they could not catch it.
+
+Proposed fix direction, not implemented yet:
+
+- Skip link texts that are not absolute paths (`socket:[…]`, `pipe:[…]`, `anon_inode:…`); they can never be device nodes.
+- Keep the `/dev/dri/` fast path.
+- For other absolute paths, get the type and device number with `statx(..., AT_STATX_DONT_SYNC | AT_NO_AUTOMOUNT, STATX_TYPE, …)`, which asks network and FUSE filesystems for cached attributes instead of a server round trip. Before relying on that, check against the 7.3 kernel source that FUSE, NFS and SMB honor `AT_STATX_DONT_SYNC` on this path. Where `statx` is unavailable, fall back to the current prefix-only behavior.
+- Route all calls through the Compat layer (34), and add fixtures for an alternate-name DRM link on both i915 and xe.
+
+## 2026-11-19, Codex — audit of Claude's finding 32 fix
+
+Compared the uncommitted change over htop `c3a0d73c` with a saved copy of the pre-32 sampler containing fixes 25–31. Tracing both readers on a fixture with an unrelated ordinary file showed a single readlinkat on its descriptor and no target stat. This confirms the intended lookup behavior for stable descriptors. A stalled remote filesystem was not exercised. Claude's previously documented descriptor-reuse race remains a limit.
+
+### 33 (P2) — an alternate DRM node path silently drops a client and bypasses the Xe process filter
+
+The prefix check at `linux/IntelGPU.c:579` rejects a descriptor before checking its character-device number. Two fixture proc links reported different names for the same Intel render device: the standard node and a path outside `/dev/dri/`. The comparison binaries used the production prefix. With a simulated i915 client, the pre-32 sampler reported one client, 20% usage and 1 MiB under both names. The reviewed version gave the same result for the standard name, but returned zero clients, 0% usage and zero bytes with `incomplete=false` for the alternate name. On the Xe fixture an inotify watch also observed the generic GPU reader opening the alternate descriptor's fdinfo. Before the change it skipped both names.
+
+This affects paths as reported by procfs, such as when a device is exposed under another name. On the live host, opening the ordinary PCI by-path alias produced `/dev/dri/renderD129` in procfs and passed the filter. The alternate-path result is a fixture comparison, not a live container or power measurement. Add coverage for an alternate reported name and retain device-identity checks without restoring arbitrary target lookups. [Example of custom device paths](https://docs.docker.com/reference/cli/docker/container/run/#add-host-device-to-container---device)
+
+### 34 (P3) — the optional-system-call fallback now requires readlinkat and fstatat
+
+`IntelGPU_drmLinkStat()` calls both APIs directly, including when its caller passes an absolute path in the no-openat branch. Configure probes these functions separately and the project's Compat layer provides fallbacks. A scratch build with all three feature flags disabled and both symbols unavailable at link time linked the pre-32 sampler. The reviewed version failed on the two new references. Use the available path-based or compatibility calls in this configuration and exercise the link without the optional symbols. The normal CachyOS build has both functions.
+
+The Intel module rebuilt and htop relinked without warnings. Style and all seven checker self-tests passed. The Intel suite passed 287 checks, including live Xe workloads and the four mutation controls. The AMD suite passed 198 checks. On the standard device layout at 0.1 s refresh, the iGPU was awake for 32.3% with neither feature, 21.5% with GPU% only, 31.7% with Intel headers only and 36.2% with both (one 15 s window each on the active desktop). No regression to continuous wake was observed there. Installed version is 3.5.3-17. The audit added records only.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — fix for finding 32
+
+Fixed at the user's request, in the uncommitted working tree over htop `c3a0d73c`, still booted on xe.
+
+- `linux/IntelGPU.c`: new `IntelGPU_drmLinkStat()`. It `readlinkat()`s the `/proc/<pid>/fd/N` link first, which reports the target path without touching the target filesystem. It only follows the link with `fstatat()` when the path starts with `INTELGPU_DRM_PREFIX` (default `/dev/dri/`), and then requires a character device. `IntelGPU_drmFile()` (Intel header sampler, `AT_FDCWD` plus the full path) and `IntelGPU_isXeFd()` (GPU% path, the process directory fd, or `AT_FDCWD` in builds without `openat`) both use it. Permission errors from either call still count as denied, as before. Added `<unistd.h>`.
+- `tools/test-intel-gpu.py`: fake builds pass `-DINTELGPU_DRM_PREFIX="/dev/"`, because fixture links point at `/dev/null` and `/dev/zero`. Live builds keep `/dev/dri/`. New stateful scenario "descriptor on another filesystem is never followed": next to a real client, a descriptor's link points into a `chmod 0` directory that stands in for a hung mount. The scenario expects `denied` 0, complete readings and 20% usage. New negative control "DRM link filter" disables the prefix check.
+
+Checks:
+
+- Build: no warnings. STYLE OK (IWYU accepts `<unistd.h>`). `test-check-style.sh` ALL PASSED. `git diff --check` is clean in both repos.
+- `test-intel-gpu.py --mutations` with the live part on xe: 287 ok, ALL PASSED, all four negative controls caught. Live peaks: encode 32.1%, decode 31.4%, graphics 100%, so the real `/dev/dri/` filter still finds the iGPU's clients. The process-column fixture (Xe FIFO skipped, AMD counted) passes. `test-sampler.py`: 198 ok, ALL PASSED.
+- Mutation check run separately: with the prefix check disabled, exactly the two new checks fail, with `denied` 1, because the old behavior followed the link. Everything else passes.
+
+Finding 32 is resolved. Limits: a really hung NFS or FUSE mount was not reproduced. The locked directory proves the link is no longer followed, which is what prevents the block. There is a tiny race: a descriptor closed and reused between `readlinkat()` and `fstatat()` could still be followed once. i915 was not re-run live in this boot.
+
+Notes: still uncommitted and not packaged, together with findings 25–31. It needs a new htop commit after `c3a0d73c`, patch 0017 and pkgrel 18.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — live xe verification of findings 28–31
+
+Still booted on xe. Audited Codex's uncommitted changes over htop `c3a0d73c`:
+
+- `IntelGPU.c`: the read spacing is now delay + delay/4 + 50 ms (28), and is skipped when `power/control` is `on` (30). New `IntelGPU_isXeFd()`.
+- `IntelGPU.h`.
+- `linux/GPU.c` (upstream): an include, a `continue` hook before each fdinfo read, and the non-`openat` fdinfo path built from `procFd` instead of `PROCDIR`/pid.
+- `tools/process-gpu-sample.c` (new), `tools/intel-gpu-sample.c`, `tools/test-intel-gpu.py`, `tools/check-style.sh`, and the docs.
+
+Review:
+
+- 28: matches the variant I measured in the previous section.
+- 29: upstream's process reader only uses `drm-engine-*` values in nanoseconds (`linux/GPU.c` lines 173–187). xe reports `drm-cycles-*`, so skipping xe descriptors loses no data while avoiding the runtime-PM wake. The upstream diff is 6 lines added and 2 changed. The non-`openat` path change is not needed on Linux/glibc builds (`HAVE_OPENAT` is set), but lets the new fixture run in a no-`openat` build.
+- 30 and 31: the forced-on bypass and the FIFO-guarded cached refresh are sound and covered.
+
+Checks:
+
+- Build: no warnings. STYLE OK. `test-check-style.sh` ALL PASSED. `git diff --check` is clean in both repos.
+- `test-intel-gpu.py --mutations` with the live part on xe: 282 ok, ALL PASSED. `test-sampler.py`: 198 ok, ALL PASSED.
+- End-to-end power check with the real htop: the user's layout plus `GPU_PERCENT` in the Main screen, `delay=1` (0.1 s), alternating 25 s windows run through `htop-capture.py`, with copies of the user's config (hash unchanged afterwards):
+
+| htop | iGPU awake |
+|---|---|
+| none | 17.9%, 18.6%, 21.4% |
+| installed 3.5.3-17 (`c3a0d73c`) | 99.9%, 99.9% |
+| working tree | 25.7%, 31.4% |
+
+Findings 28–31 are confirmed resolved. The working tree leaves about 5–12 points above baseline at htop's fastest refresh.
+
+### 32 (P3) — `stat()` through `/proc/<pid>/fd/N` reaches each descriptor's own filesystem
+
+`IntelGPU_drmFile()` (`stat(path)`) and the new `IntelGPU_isXeFd()` (`fstatat(procFd, "fd/N", &st, 0)`) follow the `/proc` magic link, so the kernel asks the target's filesystem for attributes. For a file on an NFS, SMB or FUSE mount whose server or daemon has stopped responding, that call can block. This is the well-known reason `lsof` can hang (and why it has `-b`). The Intel sampler has done this for every descriptor of every readable process since `bb4f7331`, whenever an Intel meter is shown. The finding 29 fix adds it to upstream's GPU%/GPU_TIME path, which upstream itself never does: upstream only reads `fdinfo`. Not reproduced with a hung mount here; reasoning only. Suggested fix: `readlinkat()` the descriptor first (it reports the path without touching the target filesystem), and only `stat()` targets that start with `/dev/dri/`. Sockets, pipes, anonymous inodes and regular files are then skipped without any filesystem call. Add a fixture with a non-DRM descriptor whose target would block if stat'ed (for example a FIFO reached through a symlink in the fake proc tree), to show it is never followed.
+
+Notes: everything is still uncommitted and not packaged. It needs a new htop commit after `c3a0d73c`, patch 0017 and pkgrel 18.
+
+Limits: one machine, one xe boot. 25 s windows on a live desktop are noisy.
+
+## 2026-11-19, Codex — fixes for findings 29–31
+
+**29.** The generic reader used by GPU%, GPU_TIME and the stock GPU meter now checks the descriptor's character device and current sysfs driver binding before opening fdinfo. It skips Xe descriptors, whose cycle counters this nanosecond-based reader cannot use. Other descriptors, including those whose driver cannot be identified, still go through the original accounting path. The selected Intel iGPU's header meters continue sampling Xe cycles. [Xe fdinfo interface](https://github.com/gregkh/linux/blob/v7.3.4/drivers/gpu/drm/xe/xe_drm_client.c#L21-L71)
+
+Full htop was tested at 0.1 s refresh on the 270K Plus with Xe, automatic runtime PM, and a 1000 ms delay. Each window began with a single open and close of the Intel render node. Percentages come from the change in runtime_active_time divided by elapsed wall time. The isolated layouts used 18 s windows. The project preview layout with GPU% added and its no-htop controls used approximately 22 s windows.
+
+| Layout | Awake time |
+|---|---|
+| Intel header meters only | 22.6% |
+| GPU% column only | 26.8%, 24.0% |
+| Intel headers and GPU% only | 20.4%, 28.5% |
+| Neither (clock header only) | 18.6% |
+| Project preview with GPU% | 35.0%, 30.0% |
+| No htop | 32.0%, 31.8% |
+
+The original project-layout runs were 100% awake. After anchoring the descriptor lookup to htop's open process directory, a final 18 s comparison measured 18.8% without htop, 17.6% with GPU% alone and 22.0% with the full project layout and GPU%. These are short windows on one running desktop.
+
+A mixed-driver fixture exercises the actual process-column reader. Reading Xe fdinfo would block on a FIFO. The reader skipped it, counted AMD engine time, recovered when the same device number changed driver, and kept counting when driver metadata was missing. The same checks passed in a scratch build configured without openat. Removing the filter made the test time out at the Xe FIFO. During simultaneous Intel and AMD hardware encodes, the sanitized full display showed Intel video at 32% and the AMD process at 37.3% GPU with 1.63303 s GPU_TIME.
+
+**30.** An explicit `power/control=on` permits fresh Intel header readings on every active refresh. Returning to `auto` applies the configured interval from the last completed read. A single-process fixture tests both transitions. Removing the policy check failed the fixture. This case was simulated so the live machine could keep its normal power policy.
+
+**31.** The Xe interval fixture replaces both the clock and client fdinfo with blocking FIFOs at elapsed 1299 ms. It restores regular files and checks fresh clock and counter values at 1300 ms. Two scratch builds independently reintroduced a clock scan or a client scan during a cached refresh. Each timed out at the guarded refresh.
+
+Validation on the working tree over htop `c3a0d73c`: build and style passed, including all seven style-checker self-tests. The Intel suite passed 282 checks including the process reader and live Xe workloads. The AMD suite passed 198 checks. The full display check produced no ASan or UBSan reports. The fixes are local and uncommitted. Installed package version is 3.5.3-17.
+
+## 2026-11-19, Codex — self-audit of the finding 28 fix
+
+Reviewed the uncommitted Xe timing change over htop `c3a0d73c` with project tools based on `934c2a6`. The 1300 ms interval for a 1000 ms autosuspend delay matches the Linux timer slack plus the existing 50 ms margin. The fixture suite rejected all three scratch timing variants (the earlier 50 ms margin, a constant 300 ms margin, and 50% proportional slack). The development build, style check, 271 Intel checks with live Xe workloads, and 198 AMD checks passed. [Linux 7.3.4 timer implementation](https://github.com/gregkh/linux/blob/v7.3.4/drivers/base/power/runtime.c#L581-L594)
+
+### 29 (P2) — the GPU% process column can keep Xe awake independently of the Intel header meters
+
+The previous power comparison measured a standalone sampler. It missed a second reader in the full program and therefore did not establish the power benefit for the project's GPU% layout. At 0.1 s refresh on the 270K Plus with Xe, automatic runtime PM and a 1000 ms delay, full htop with the project preview layout plus the GPU% process column kept the iGPU awake 100% in two 22 s windows on each of the before and after builds. The comparison build differed only in restoring the 50 ms constant. Without htop, both baseline windows measured 31.0%.
+
+Independent 18 s windows used the fixed htop with minimal layouts. Each window started with one open and close of the Intel render node. The percentage is the change in `runtime_active_time` divided by wall time. Captured terminal output confirmed the requested rows and column were displayed.
+
+| Enabled in htop | iGPU awake |
+|---|---|
+| Intel header meters only | 30.4%, 29.3% |
+| GPU% process column only | 100%, 100% |
+| Intel headers and GPU% | 100%, 100% |
+| Neither (clock header only) | 25.1% |
+
+The GPU% column enables upstream `GPU_readProcessData()` from `linux/LinuxProcessTable.c`. It reads process fdinfo outside the custom Intel sampler. The experiment isolates the column's effect on this desktop. It does not identify the particular client that triggers it. Scope the documented power result to the Intel header sampler and include this column in end-to-end power checks before claiming a benefit for that layout. The project plan asks to preserve upstream process-column behavior.
+
+### 30 (P3) — forced-on Xe devices reuse stale readings
+
+`IntelGPU_xeReadDue()` consults the delay even when `power/control` is `on`, which forbids runtime suspend. In a fixture with a 10000 ms delay, the clock changed from 800 to 1700 MHz after the initial sample. The current sampler still displayed 800 MHz at elapsed 12549 ms, then 1700 MHz at 12550 ms. The prior sampler already throttled in this configuration and refreshed at 10050 ms. Bypass the interval when the policy explicitly reports `on` and cover switching between `on` and `auto` in one process. This was reproduced with a fixture only. [Kernel power policy documentation](https://docs.kernel.org/power/runtime_pm.html)
+
+### 31 (P3) — the Xe timing fixture can miss a hardware read during a cached refresh
+
+In a scratch build, inserting `IntelGPU_readTopology()` immediately before restoring the cached sample made an extra clock read. Every existing Intel fixture assertion passed. A separate probe replaced the clock file with a FIFO after the initial sample. It observed zero reads at elapsed 1299 ms and a read at 1300 ms on the working tree, and detected the scratch build's extra read at 1299 ms. Include an observable read in the permanent cached-refresh test so that it detects this power regression even if the displayed values stay the same.
+
+## 2026-11-19, Codex — verified fix for finding 28
+
+Linux 7.3.4 allows the runtime autosuspend timer to expire up to 25% after the configured delay. With a 1000 ms delay, the previous Xe sampler could read the clock and counters again after 1050 ms, while the timer could still be pending. The corrected sampler allows the proportional slack plus the existing 50 ms margin after the previous read finishes, giving a 1300 ms interval on this machine. It continues to check sleep on every refresh. [Kernel timer implementation](https://github.com/gregkh/linux/blob/v7.3.4/drivers/base/power/runtime.c#L581-L594)
+
+Measured on the 270K Plus running Xe on 7.3.4-1-cachyos. Each 30-second window started with one open and close of the Intel render node. GPU awake time came from the change in `power/runtime_active_time`. Both samplers polled every 0.1 s. The windows ran in the order baseline, original, fixed, fixed, original, baseline.
+
+| Reader | First window awake | Second window awake |
+|---|---:|---:|
+| No sampler | 30.4% | 31.4% |
+| Working tree before this fix | 38.4% | 65.2% |
+| Fixed working tree | 35.9% | 35.9% |
+
+The deterministic Xe fixture failed five timing checks before the fix. It now checks that a 1000 ms delay holds readings at 1050 and 1299 ms and refreshes them at 1300 ms. A 250 ms delay also exercises the proportional margin. Both timing boundaries pass, along with recovery on wake and nonpositive delays.
+
+The build and style checks passed. The Intel suite passed 271 checks including mutation controls and live Xe encode, decode and graphics. The AMD suite passed 198 checks. At a 0.1 s refresh, sanitized htop showed 31% video during a live encode with no ASan or UBSan reports. Hardware measurements cover one Xe device on a running desktop, so background GPU activity contributes to the awake times. The fix is uncommitted over htop `c3a0d73c`. Installed package version is 3.5.3-17.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — live xe verification of the finding 27 fix
+
+Still booted on xe. Audited Codex's uncommitted change over htop `c3a0d73c`. `IntelGPU_refresh()` now treats `resuming` as sleep, like `suspended` and `suspending` (matching AMD finding 17). Two fixture steps cover it: an xe step in the throttle scenario, and an i915 step whose clock file is a FIFO that would block if read while resuming.
+
+- Build: no warnings. STYLE OK. `git diff --check` is clean in both repos.
+- `test-intel-gpu.py --mutations` with the live part on xe: 270 ok, ALL PASSED, including "Xe resuming still shows sleep" and "resuming skips dynamic reads". Live peaks: encode 33.8%, decode 32.0%, graphics 100%. `test-sampler.py`: 198 ok, ALL PASSED.
+- Live: a standalone sampler at a 0.1 s refresh for 60 s returned suspended 326 and active 268, with no `unavailable`. Before the fix, 1 of about 60 to 120 samples was `unavailable`.
+
+Finding 27 is confirmed resolved.
+
+### 28 (P3) — at a 0.1 s refresh the xe read spacing is shorter than the kernel's autosuspend slack
+
+The finding 25 fix reads xe counters and clocks again `autosuspend_delay_ms` + 50 ms after the previous read finished. That holds the iGPU awake much less at 0.25 s and slower (26.7% and below, see the previous section). But htop's fastest delay is 0.1 s, and there the read lands while the kernel has not yet suspended the device. Linux runtime PM arms the autosuspend timer with slack of up to a quarter of the delay. So with xe's 1000 ms delay, suspend can come up to about 1250 ms after the last use, and a read at 1050–1150 ms re-arms it. Measured in alternating 30 s windows with a standalone sampler polled every 0.1 s:
+
+| Sampler | iGPU awake |
+|---|---|
+| none (baseline, 4 windows) | 22.5–29.5% |
+| working tree (delay + 50 ms) | 63.5%, 53.6%, 63.9%, 76.6% |
+| scratch variant (delay + delay/4 + 50 ms) | 21.1%, 37.0% |
+
+The slack explanation fits the variant's result, though I did not read the kernel source to confirm it. Suggested fix: space xe reads by `delay + delay / 4 + 50` ms, and update the fixture times in "Xe runtime PM sampling interval" to match. The cost is xe meters updating every about 1.3 s instead of every about 1.05 s at fast refreshes. htop's default 1.5 s refresh is unaffected either way.
+
+Notes: still uncommitted and not packaged. It needs a new htop commit after `c3a0d73c`, patch 0017 and pkgrel 18.
+
+Limits: one machine, one xe boot. 30 s windows are noisy because other processes (here ffmpeg-converter and Xwayland hold the iGPU) wake it too.
+
+## 2026-11-19, Codex — verified fix for finding 27
+
+On the working tree based on htop `c3a0d73c` with the fixes for 25–26 present, the new i915 and Xe fixture steps both returned `unavailable` during `resuming`. These were the only failures before the fix.
+
+The Intel sampler now handles `resuming` in the existing sleep branch. On i915 the clock FIFO stayed unread through resume. On Xe the transition was visible even inside the autosuspend sampling interval. Both drivers took a fresh baseline on the first active refresh. With the Xe fixture held at `resuming`, a sanitized htop displayed `sleep` on the heading, usage, clock, memory and video rows.
+
+The development build and style check passed. The Intel suite passed all 270 checks, including the three mutation controls and live Xe workloads. The AMD suite passed all 198 checks. Full-program fixture and live display checks produced no ASan or UBSan reports. The resume transition was forced only in fixtures. The fix is uncommitted and the installed package is 3.5.3-17.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — live xe verification of the finding 25 and 26 fixes
+
+Still booted on xe (`i915.force_probe=!7d67 xe.force_probe=7d67`). Audited Codex's uncommitted changes over htop `c3a0d73c`: `IntelGPU.c`, `tools/intel-gpu-sample.c`, `tools/test-intel-gpu.py` and the docs.
+
+The fix for 25 is correct. On xe only, with an unchanged device that was active on the previous refresh, the sampler still checks `runtime_status` on every refresh. It repeats the previous sample until `power/autosuspend_delay_ms` + 50 ms has passed since the last read finished. The delay falls back to 1000 ms when the file is missing or malformed, and a delay of 0 or less permits every read. Rates stay correct across skipped refreshes because xe measures against GPU timestamps. i915 is unchanged. The fake-clock scenario covers held refreshes, the due refresh, sleep and wake, a device change, and disabled, zero, short, malformed and missing delays. The fix for 26 drops only the exact Mesa "experimental with Xe KMD" line, only for the graphics workload; real errors and other Mesa warnings still fail.
+
+- Build: no warnings. STYLE OK. `git diff --check` is clean in both repos.
+- `test-intel-gpu.py --mutations` with the live part on xe: 268 ok, ALL PASSED. "Intel graphics workload succeeds" now passes. Live peaks: encode 32.3%, decode 17.8%, graphics 100%. `test-sampler.py`: 198 ok, ALL PASSED.
+- My own runtime PM measurement (30 s windows, standalone sampler, `power/runtime_active_time`):
+
+| Sampler | Refresh | iGPU awake |
+|---|---|---|
+| none | — | 23.1% / 23.5% (before and after) |
+| committed `c3a0d73c` | 0.5 s | 96.1% |
+| working tree (fix) | 0.5 s | 24.5% |
+| working tree (fix) | 1.5 s | 26.4% |
+| working tree (fix) | 0.25 s | 26.7% |
+
+Findings 25 and 26 are confirmed resolved.
+
+### 27 (P3) — a `resuming` runtime status shows every Intel meter as N/A for one refresh
+
+`IntelGPU_refresh()` treats only `suspended` and `suspending` as sleep. `resuming` falls through to `INTELGPU_UNAVAILABLE`, so the heading reads `Intel iGPU: N/A` and every Intel meter reads N/A for that refresh instead of `sleep`. Polling `runtime_status` every 2 ms for 20 s on xe gave active 1942, suspending 24, suspended 7447, resuming 31. The sampler runs above reported `unavailable` on 1 of about 60 and 1 of about 120 ticks. This behavior predates the fix and is shared with i915, but xe's 1000 ms autosuspend (i915 here: 10000 ms) makes it much more frequent. The AMD sampler already treats `resuming` as sleep (finding 17). Suggested fix: add `resuming` to the sleep states, and add a fixture step that sets `runtime_status` to `resuming` and expects `suspended`.
+
+Notes: the fix is not packaged yet. `c3a0d73c` is already pushed, so it needs a new htop commit, a re-export (new patch 0017) and pkgrel 18 rather than a squash. A cosmetic nit: README's new xe paragraph uses a curly apostrophe (`driver’s`), while the rest of the file uses straight ones.
+
+Limits: one machine, one xe boot. i915 runtime PM was not re-measured.
+
+## 2026-11-19, Codex — verified fixes for Xe findings 25 and 26
+
+For finding 25, the sampler uses the Xe device's autosuspend delay and gives the driver another 50 ms to suspend after the last clock and fdinfo scan. Short refreshes reuse the previous readings while checking device identity and runtime status every time. A visible sleep clears the cache and client baseline. The next active sample starts immediately. A missing or malformed delay uses 1000 ms. A valid nonpositive delay allows every refresh. The Xe limiter uses Linux CLOCK_MONOTONIC for both the elapsed-time check and the scan completion timestamp.
+
+Measured runtime_active_time on the 270K Plus with Xe bound, a 1000 ms autosuspend delay, and the desktop running. Each 14-second window started with one open/close of the render node. The standalone samplers polled every 0.5 s.
+
+| Reader | Time awake |
+|---|---|
+| No sampler, two windows | 24.8%, 25.2% |
+| 3.5.3-17 sampler | 100.0% |
+| Fixed sampler, two windows | 39.3%, 26.1% |
+
+For finding 26, the test ignores the exact Mesa Xe KMD experimental warning during the graphics workload. It still checks the FFmpeg exit status, other stderr output, and GPU execution on the selected PCI device. The original test failed only on this Mesa warning even though graphics reached 100%.
+
+The Intel suite passed 268 assertions on Xe, including all three mutation checks. Live peaks were 32.2% encode, 32.2% decode and 100% graphics. The AMD suite passed 198 checks. The build and style checks passed. At a 0.5 s refresh, the sanitized htop displayed 32% video, 2000 MHz and 85.6 MiB during encoding, with no sanitizer reports. The released patch series reproduced the baseline and accepted the working-tree source diff cleanly. The installed package is 3.5.3-17. The fixes are uncommitted. Only the 270K Plus was used for this Xe hardware verification.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — first live run on xe
+
+The user booted 7.3.4 once with `i915.force_probe=!7d67 xe.force_probe=7d67`. The iGPU (`8086:7d67`) bound to `xe` (the kernel log says "Found meteorlake (device ID 7d67)"). GuC 70.53.0, HuC 8.5.4 and GSC 102.1.15.1926 loaded on GT0 (render) and GT1 (media). The log shows no xe warnings or errors; the only error lines are the known amdgpu RA24 noise. The `/dev/dri` nodes swapped for that boot: the iGPU was `card0`/`renderD129` and the 9070 XT `card1`/`renderD128`. Everything that uses `by-path` (the tests, mpv) was unaffected. Layout: `tile0/gt0/engines` = bcs ccs rcs, `tile0/gt1/engines` = vcs vecs, `freq0` max 2000 MHz on gt0, autosuspend delay 1000 ms. Tested: htop `c3a0d73c` source and the installed htop-gpu 3.5.3-17.
+
+Results:
+
+- `test-intel-gpu.py --mutations` on xe: 249 of 250 ok. The live peaks match i915: encode 32.7%, decode 18.2%, graphics 100%. Memory and the requested clock were valid in every workload, and the run exited cleanly under ASan/UBSan. The one failure is finding 26 below.
+- Installed htop-gpu 3.5.3-17, run with a copy of the user's htop-gpurc during an `h264_vaapi` encode: heading `Intel iGPU`, usage 0%, clock 2000MHz, mem 85.6M, Vid 32% E/D. These match the i915 capture. The user's config hash was unchanged.
+- So the xe paths (cycle ratios, system + GTT memory, `freq0` clock on the render GT, separate media GT) work on real hardware.
+
+### 25 (P3) — refreshes faster than xe's autosuspend delay keep an idle iGPU awake
+
+On xe, reading a client's fdinfo cycle counters or `tile0/gtN/freq0/{cur,max}_freq` while the GPU is active resets its 1000 ms autosuspend timer. The sampler never wakes a suspended GPU, since it checks `runtime_status` first. But once the GPU is awake, sampling faster than about once per second keeps it awake. Measured with `power/runtime_active_time` over 30 s windows, with the user's desktop running:
+
+| Reader (only while active) | iGPU awake |
+|---|---|
+| none (baseline, measured twice) | 17–23% |
+| standalone sampler, every 1.5 s (htop's default delay) | 27% |
+| standalone sampler, every 0.5 s | 80% |
+| fdinfo reads alone, every 0.5 s | 78% |
+| `cur_freq` + `max_freq` reads alone, every 0.5 s | 100% |
+
+At htop's default delay the effect is small. With `-d 5` or a 0.5 s delay set in htop's settings, an idle xe iGPU stays awake most of the time. i915 was not measured in this boot; its autosuspend delay here is 10000 ms. A possible fix: on xe, read the clock and client counters no more often than `power/autosuspend_delay_ms` (keep the previous values in between), or document the trade-off. Both reads count, so throttling only one is not enough.
+
+### 26 (P3) — the live graphics check fails on Mesa's xe warning
+
+`live_tests()` requires an empty stderr from every workload. On xe, Mesa's Intel Vulkan driver prints "Support for this platform is experimental with Xe KMD, bug reports may be ignored.". So "Intel graphics workload succeeds" fails even though FFmpeg exits 0 (confirmed by running the same command alone) and the sampler measured 100%. Suggested fix: drop known Mesa warning lines (`MESA: warning: ...` about Xe KMD support) before the empty-stderr check, and keep the exit-code check.
+
+Limits: one boot, one machine, i915 runtime PM not measured. The device was force-probed, which Intel and Mesa both call experimental for this platform.
 
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — independent verification of the finding 24 fix
 

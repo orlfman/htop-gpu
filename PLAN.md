@@ -91,6 +91,22 @@ Tiger Lake and Rocket Lake audit (2026-11-19): finding 23 is fixed and verified 
 
 Intel descriptor audit (2026-11-19): finding 24 is fixed in the 3.5.3-17 tree and verified on the 270K Plus. See AUDIT.md for the paired live result and regression coverage.
 
+Xe hardware audit (2026-11-19): findings 25 and 26 are fixed and verified on the 270K Plus in the working tree based on htop `c3a0d73c`. The installed package is 3.5.3-17. See AUDIT.md for the power comparison and live workload results.
+
+Intel runtime resume (2026-11-19): finding 27 is fixed and verified in the working tree. The meters show `sleep` through `resuming` on i915 and Xe. See AUDIT.md.
+
+Xe fast refresh (2026-11-19): finding 28 is fixed and verified in the working tree. Counter and clock reads allow for the kernel autosuspend timer slack. See AUDIT.md for the 0.1 s live measurements.
+
+Finding 28 self-audit (2026-11-19): the Intel header timing passed. Findings 29–31 are fixed locally and verified for the GPU% layout, forced-on Xe devices and cached-read test coverage. See AUDIT.md.
+
+Finding 32 audit (2026-11-19): verified the ordinary descriptor guard. Findings 33–34 are fixed and independently verified for the original remapped-device and optional-system-call cases. See AUDIT.md.
+
+Follow-up audit (2026-11-19): findings 35–38 are fixed and independently verified in their original cases. See AUDIT.md.
+
+Further audit (2026-11-19) opened findings 39–41 for incomplete mount information, mount resolution cost, and the statx fallback test. They are fixed and verified. See AUDIT.md.
+
+Xe and descriptor hardening (2026-11-19): findings 25–41 are committed as htop `1c205705` (patch 0017) and packaged as htop-gpu 3.5.3-18 (built and checked, not yet installed; installed is still 3.5.3-17). Committed locally, not pushed.
+
 In progress: nobody.
 
 GitHub: https://github.com/orlfman/htop-gpu (this folder, public since 2026-11-19) and

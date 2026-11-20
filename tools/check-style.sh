@@ -27,7 +27,7 @@ cd "$src" || failed_to_run "no htop source in $src"
 base=$(git describe --tags --abbrev=0 HEAD)
 mapfile -t files < <( { git diff --name-only --diff-filter=A "$base" -- '*.c' '*.h';
                         git ls-files --others --exclude-standard -- '*.c' '*.h'; } | sort -u)
-files+=("$here/amdgpu-sample.c" "$here/intel-gpu-sample.c" "$@")
+files+=("$here/amdgpu-sample.c" "$here/intel-gpu-sample.c" "$here/process-gpu-sample.c" "$@")
 
 echo "upstream base: $base"
 echo "checking: ${files[*]#"$here/"}"

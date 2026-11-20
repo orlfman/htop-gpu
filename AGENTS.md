@@ -8,8 +8,8 @@ to know lives in this folder, never only in one agent's private memory.
 
 A personal custom build of htop 3.5.3 with header meters for AMD dedicated cards
 (RDNA 2, 3 and 4: RX 6000, 7000 and 9000; developed and tested on an RX 9070 XT,
-the others only against fake sysfs trees; htop `f842f486`, `7c2fe84b`, `943464c0`, `c3a0d73c`; installed as
-3.5.3-17):
+the others only against fake sysfs trees; htop `f842f486`, `7c2fe84b`, `943464c0`, `c3a0d73c`, `1c205705`;
+packaged as 3.5.3-18, installed 3.5.3-17):
 GPU usage, VRAM, power, edge/junction/memory temperatures, GPU clock, VRAM clock,
 video engine. Not meant for upstream htop, but kept as close to upstream as
 possible so new htop releases are easy to rebase onto.
@@ -31,9 +31,12 @@ Committed as htop `c3a0d73c` and packaged as 3.5.3-17 (patch 0016; installed
 Lake and newer integrated families (109 PCI IDs from the Linux 7.3 lists) on
 both `i915` and `xe`, selecting the supported iGPU with the lowest PCI address.
 Discrete Intel graphics, including DG1 and Arc, and earlier integrated families
-are excluded. Only this machine's `8086:7d67` on `i915` is tested on hardware;
-`xe` and the other families are covered by fake sysfs/fdinfo tests. See
-AUDIT.md (findings 20-24).
+are excluded. This machine's `8086:7d67` is tested on both `i915` and `xe`.
+The other families are covered by fake sysfs/fdinfo tests. See
+AUDIT.md (findings 20-26).
+htop `1c205705` (patch 0017, package 3.5.3-18, built but not installed) adds the
+xe runtime-PM read spacing, the GPU% xe skip, and descriptor identification that
+never queries network or FUSE filesystems (AUDIT.md findings 25-41).
 
 ## Read first
 
@@ -115,6 +118,11 @@ Run after every change, from this folder:
 - After touching `linux/IntelGPU.c` or its meters: `python3 -I tools/test-intel-gpu.py --mutations`
   must end with `ALL PASSED` (stateful fake sysfs/proc, negative controls,
   live Intel encode/decode, ASan/UBSan). `--fake-only` skips live workloads.
+- After changing Xe read timing or the generic GPU process reader, include the
+  mixed-driver process fixture in the Intel suite (it runs by default). On a
+  Xe boot, compare full htop's idle GPU awake time at 0.1 s refresh in throwaway
+  layouts with Intel headers only, GPU% only, both, and neither. Record the
+  windows and autosuspend delay in AUDIT.md.
 - After touching the heading meters (`AMDGPUInfo`, `IntelCPUInfo`) or the card
   name: `python3 -I tools/test-headings.py` must end with `ALL PASSED` (about 50 s;
   fake cpuinfo cases, fake card state changes under one running htop, ASan/UBSan).

@@ -3,6 +3,92 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-11-19, Claude Code (Claude Opus 5.5) — commit and package 3.5.3-18
+
+At the user's request; not pushed, not installed.
+
+- htop `amdgpu-meters`: `1c205705` "linux: harden Intel iGPU sampling for xe and the GPU% column". This is one commit for findings 25–41 in `linux/IntelGPU.c`, `linux/IntelGPU.h` and `linux/GPU.c`, the exact tree tested last round: the fixes share `IntelGPU_fdDevice()` and the mount table, so splitting them would leave intermediate commits that cannot be tested on their own. It is a new commit after the already pushed `c3a0d73c`, not a squash.
+- `pkgrel=18`. `tools/export-patches.sh` re-exported the series: new `0017-linux-harden-Intel-iGPU-sampling-for-xe-and-the-GPU-.patch`, and 0001–0016 changed only in their `[PATCH nn/17]` numbering.
+- Applying the 17 patches to a fresh `git archive 3.5.3` reproduces the whole `amdgpu-meters` tree with no rejects, and all 17 checksums match.
+- `makepkg -fC` built `htop-gpu-3.5.3-18-x86_64.pkg.tar.zst`. namcap shows the same three messages as before. The packaged binary reports `3.5.3-18-gpu`, and on xe, during an `h264_vaapi` encode with a copy of the user's config, it showed `Intel iGPU`, 2000MHz, 85.6M and Vid 32% E/D.
+- Updated the PLAN.md status, the AUDIT.md status lines, AGENTS.md and the README xe paragraph from "working tree" to the committed state.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — fix findings 39–41
+
+Verified and fixed in one go, at the user's request.
+
+- 39: paths htop cannot classify are no longer dropped. The Intel sampler identifies them from fdinfo, which a v7.3.4 source check showed never reaches FUSE, NFS or SMB code. Clients under alternate names on overlay, below a visible FUSE mount, or with no mount table are counted, and a known client keeps its history.
+- 40: each lookup resolves among only the mounts leading to its path, 4–5x faster on large tables.
+- 41: the harness's statx stub is guarded, with a new "headers without SYS_statx" build variant.
+
+Results: build and style clean, 323 Intel checks (live on xe, seven mutations caught, three fallback variants), 198 AMD checks, and end-to-end htop with GPU% at 0.1 s at 25–28% awake against a 20–21% baseline. Uncommitted and not packaged, together with findings 25–38. Installed: 3.5.3-17.
+
+## 2026-11-19, Codex — audit the finding 35–38 fixes
+
+The original cases passed. Opened findings 39–41 for false idle when mount information is unavailable, repeated mount-table scans during path resolution, and the fallback test on headers without the statx syscall number. Build, style, 309 Intel checks, and 198 AMD checks passed. The implementation and audit records are uncommitted. Installed version is 3.5.3-17.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — fix findings 35–38
+
+Fixed at the user's request.
+
+- 35: statx now goes through the raw system call, and falls back to `fstatat`/`stat` (remembered) when the kernel or seccomp rejects it.
+- 36: mount resolution follows mount and parent IDs, so mounts hidden under later ones no longer claim a path.
+- 37: local filesystems are an allowlist, so unknown types are skipped.
+- 38: one mount table parse per refresh is shared by the Intel meters and GPU%.
+
+Tests: a statx-rejecting harness mode, two fallback-build variants, mount IDs in fixtures, unlisted-network and stacked-mount scenarios, a combined-refresh harness counting mountinfo opens, and two new negative controls. Proof runs on mutated copies showed the new checks fail on each broken version. Results: build and style clean, 309 Intel checks (live on xe, six mutations caught), 198 AMD checks, and end-to-end htop with GPU% at 0.1 s at 26–27% awake against a 23% baseline. Uncommitted and not packaged, together with findings 25–34. Installed: 3.5.3-17.
+
+## 2026-11-19, Codex — audit the finding 33–34 fixes
+
+The original alternate-path and optional-call cases now pass, including the process column in a fallback build. Opened findings 35–38 for unavailable statx, hidden child mounts, network filesystems classified as local, and duplicate mount-table parsing. Build, style and its self-tests passed, along with 296 Intel and 198 AMD checks. The implementation and audit records are uncommitted. Installed version is 3.5.3-17.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — fix findings 33 and 34
+
+Fixed at the user's request. A kernel check showed `statx(AT_STATX_DONT_SYNC)` alone is not hang-proof on SMB, so the new `IntelGPU_fdDevice()` uses htop's own mount table instead. It skips non-path links, looks up `/dev/dri/` nodes directly, and looks up other paths only on local filesystems, never on network or FUSE ones. A DRM node under another name is found by its device number again (33). The lookups fall back to path-based calls without `readlinkat`/`fstatat`/`openat` (34). Tests: fake mount tables, FUSE and local stand-ins, an alternate-name scenario, an alternate-name xe FIFO in the process-column fixture, a fallback build that cannot link the *at calls and passes all fixtures, and two new negative controls. Results: build and style clean, 296 Intel checks (live on xe, five mutations caught), 198 AMD checks, and end-to-end htop with GPU% at 0.1 s at 24–28% awake against a 22% baseline. Uncommitted and not packaged, together with findings 25–32. Installed: 3.5.3-17.
+
+## 2026-11-19, Codex — audit Claude's finding 32 fix
+
+Confirmed the two readers avoid stat on a stable non-DRM descriptor. Opened findings 33 and 34: remapped device paths can produce false idle readings and bypass the Xe filter, and the build without the optional syscalls now fails to link. The normal build, style and self-tests, 287 Intel checks and 198 AMD checks passed. Audit records are uncommitted alongside the previous changes. Installed version is 3.5.3-17.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — fix finding 32
+
+Fixed at the user's request. `linux/IntelGPU.c` now reads each `/proc/<pid>/fd/N` link's text first and only follows links under `/dev/dri/`, so descriptors on other filesystems (a possibly hung NFS or FUSE mount) are never `stat()`ed. This covers both the Intel header sampler and the GPU% `xe` filter. Tests: fixture builds use a `/dev/` prefix, there is a new "descriptor on another filesystem is never followed" scenario, and a new "DRM link filter" negative control. Build, style and its self-tests passed, the Intel suite passed 287 checks (live on xe, all four mutations caught), and the AMD suite passed 198. Uncommitted and not packaged, together with Codex's fixes for findings 25–31. Needs a new htop commit, patch 0017 and pkgrel 18. Installed: 3.5.3-17.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — verify findings 28–31 live on xe
+
+Audit only, no code changes. Findings 28–31 are confirmed fixed. The Intel suite passed 282 checks with the live part on xe, the AMD suite 198, and the style checker and its self-tests passed. End to end at a 0.1 s refresh with the user's layout plus GPU%, the iGPU was awake 25.7% and 31.4% with the working tree, against 99.9% with installed 3.5.3-17 and 18–21% with no htop. Opened P3 finding 32: the descriptor checks `stat()` through `/proc/<pid>/fd/N`, which reaches the target's filesystem, so a hung network or FUSE mount could block htop. Suggested a `readlinkat()` pre-filter. Everything is uncommitted and not packaged. Installed: 3.5.3-17.
+
+## 2026-11-19, Codex — fix findings 29–31
+
+The GPU% process column skips Xe descriptors and continues counting other GPUs used by the same process. Xe header meters now update every refresh when the device is forced on. Added tests for mixed-driver process accounting and for clock or fdinfo reads during a cached refresh. In the final 0.1 s refresh check, full htop with GPU% kept the iGPU awake 22.0% of the time, compared with 18.8% without htop and 100% before the fix. The build, style, sanitizer display, 282 Intel checks and 198 AMD checks passed. The source, tests and records are uncommitted alongside findings 25–28. Installed version is 3.5.3-17.
+
+## 2026-11-19, Codex — audit the finding 28 fix
+
+The Xe header sampler passed the timing and live checks. Opened findings 29–31. With GPU% enabled, full htop kept the iGPU awake throughout every measured window. Forced-on devices still throttle readings, and a scratch build that reread the clock during a cached refresh passed the existing fixture suite. Build, style, 271 Intel checks and 198 AMD checks passed. Audit records and the earlier fixes remain uncommitted. Installed package is 3.5.3-17.
+
+## 2026-11-19, Codex — fix Xe finding 28
+
+Xe now allows for the kernel's autosuspend timer slack before sampling an active GPU again. At 0.1 s refresh with a 1 s autosuspend delay, the GPU stayed awake for 35.9% of each fixed test window, compared with 38.4% and 65.2% before the change and 30.4–31.4% without the sampler. The build, style, sanitized display, 271 Intel checks and 198 AMD checks passed. Findings 25–28 are fixed in the working tree and await packaging. Installed version is 3.5.3-17.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — verify finding 27 live on xe
+
+Audit only, no code changes. Finding 27 is confirmed fixed: 594 samples at a 0.1 s refresh on xe showed no `unavailable`. The Intel suite passed 270 checks with the live part on xe, and the AMD suite passed 198. Opened P3 finding 28: at htop's fastest 0.1 s refresh, the xe read spacing (delay + 50 ms) is inside the kernel's autosuspend timer slack. The iGPU was awake 54–77% of the time against a 23–30% baseline. A scratch variant spacing reads by delay + 25% + 50 ms gave 21–37%. Everything is uncommitted and not packaged. Installed: 3.5.3-17.
+
+## 2026-11-19, Codex — fix Intel finding 27
+
+Reproduced the N/A refresh on i915 and Xe fixtures and fixed the Intel sampler to show `sleep` until the driver reports `active`. Added both fixture steps and verified all five Intel rows during resume in a sanitized htop. The build, style check, 270 Intel checks and 198 AMD checks passed. Findings 25–27 are fixed locally and await packaging. The installed version is 3.5.3-17.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — verify the Xe fixes live
+
+Audit only, no code changes, still booted on xe. Findings 25 and 26 are confirmed fixed. The Intel suite passed 268 checks with the live part on xe, and the AMD suite passed 198. At a 0.5 s refresh the iGPU was awake 24.5% of the time, against 96.1% with the committed sampler and a 23% baseline. Opened P3 finding 27: a `resuming` runtime status shows the Intel meters as N/A for a refresh, which is frequent on xe. Everything is uncommitted and not packaged; it needs a new htop commit, patch 0017 and pkgrel 18. Installed: 3.5.3-17.
+
+## 2026-11-19, Codex — fix Xe findings 25 and 26
+
+The Xe sampler now spaces fdinfo and clock reads around autosuspend while checking sleep on every refresh. The graphics test accepts the exact Mesa Xe KMD experimental warning. At a 0.5 s refresh the fixed sampler left the 270K Plus awake for 26–39% of two test windows, down from 100% with the old sampler. All 268 Intel and 198 AMD checks passed, along with build, style and sanitized display checks. The fixes are uncommitted and the installed package is 3.5.3-17. See AUDIT.md for hardware and test details.
+
+## 2026-11-19, Claude Code (Claude Opus 5.5) — first live xe test
+
+Audit only, no code changes. The user booted once with `i915.force_probe=!7d67 xe.force_probe=7d67`. The iGPU ran on xe with no kernel warnings. The Intel suite passed 249 of 250 checks live: encode 32.7%, decode 18.2%, graphics 100%. The installed htop-gpu 3.5.3-17 showed the same readings as on i915. Opened two P3 findings in AUDIT.md. 25: refreshing faster than about once a second keeps an idle xe iGPU awake (80% awake at 0.5 s against a 17–23% baseline; fine at the 1.5 s default). 26: the live graphics check fails on Mesa's "experimental with Xe KMD" warning even though FFmpeg exits 0. A normal reboot returns the iGPU to i915. Doc edits are uncommitted.
 
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — make htop-gpu public
 
