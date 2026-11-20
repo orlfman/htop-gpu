@@ -109,7 +109,7 @@ Xe and descriptor hardening (2026-11-19): findings 25–41 are committed as htop
 
 Independent verification (2026-11-19): the original 39–41 cases pass in 3.5.3-18. Package integrity and live Xe video display also passed. Finding 42 is open for generic-only fdinfo during a mount-table gap. See AUDIT.md.
 
-[AMD CPU package power](PLAN-AMD-CPU-POWER.md) is committed as htop `cf48f0a7` (patch 0018) and packaged as htop-gpu 3.5.3-19 (built, not yet installed), with the paused-meter fix for the GPU meters in `e33c31ec` (patch 0019). The original cases for findings 43–47 passed independent retesting. Follow-up findings 48–50 are fixed and verified. Simulated AMD meter checks and the live Intel MSR and MMIO checks passed. AMD hardware validation is pending. See [AUDIT.md](AUDIT.md).
+[AMD CPU package power](PLAN-AMD-CPU-POWER.md) is committed as htop `cf48f0a7` (patch 0018) and installed and pushed as htop-gpu 3.5.3-19 on 2026-11-19, with the paused-meter fix for the GPU meters in `e33c31ec` (patch 0019). The original cases for findings 43–47 passed independent retesting. Follow-up findings 48–50 are fixed and verified. Simulated AMD meter checks and the live Intel MSR and MMIO checks passed. AMD hardware validation is pending. See [AUDIT.md](AUDIT.md).
 
 In progress: nobody.
 

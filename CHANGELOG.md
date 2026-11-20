@@ -3,6 +3,15 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-11-19, Claude Code (Claude Opus 5.5) — push and install 3.5.3-19
+
+At the user's request.
+
+- Push: `src/htop` `amdgpu-meters` `1c205705..e33c31ec` (`cf48f0a7`, `e33c31ec`) to orlfman/htop (private), and `main` `dded226..cdee6f3` (`7485e44`, `cdee6f3`) to orlfman/htop-gpu (public), followed by this record commit. All were fast-forwards. I scanned the new commits for emails, tokens and keys before pushing and found none.
+- Install: the user ran `sudo pacman -U` in the Terminal panel. `pacman -Q`: htop-gpu 3.5.3-19. `--version`: 3.5.3-19-gpu. The installed binary is identical to the package's, and `pacman -Qkk` shows 0 altered files.
+- Live, still on xe, with a copy of the user's config: the CPU, Radeon and Intel iGPU headings are shown (the iGPU was asleep) and `Pwr` reads 8.7W/250W. The user's config hash was unchanged.
+- Updated the PLAN.md, AUDIT.md and AGENTS.md status lines to installed.
+
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — README for CPU power
 
 Docs only, at the user's request.

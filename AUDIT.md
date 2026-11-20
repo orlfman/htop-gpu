@@ -18,7 +18,7 @@ Finding 32 (P3, `stat()` through `/proc/<pid>/fd/N` reaches each descriptor's ow
 Findings 33–34 (alternate DRM node paths and optional syscall support) are fixed and verified in htop `1c205705` (installed in 3.5.3-18, Claude Code).
 The original 33–34 reproductions also pass independently. Findings 35–38 from the follow-up audit are fixed and verified in htop `1c205705` (installed in 3.5.3-18, Claude Code).
 Independent retesting confirmed fixes 35–38. Findings 39–41 are fixed and verified in htop `1c205705` (installed in 3.5.3-18, Claude Code).
-Independent retesting confirmed the original cases for findings 39–41 in 3.5.3-18. Finding 42 is open. Findings 43–47 (CPU package power; Claude Code) and 48–50 (Codex) are fixed and verified in htop `cf48f0a7`, and the GPU meters' pause fix in `e33c31ec` (packaged as 3.5.3-19, not yet installed).
+Independent retesting confirmed the original cases for findings 39–41 in 3.5.3-18. Finding 42 is open. Findings 43–47 (CPU package power; Claude Code) and 48–50 (Codex) are fixed and verified in htop `cf48f0a7`, and the GPU meters' pause fix in `e33c31ec` (installed in 3.5.3-19 on 2026-11-19).
 P2 means normal priority; P3 means low priority.
 
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — audit of Codex's fixes for findings 48–50
