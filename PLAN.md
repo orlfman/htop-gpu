@@ -105,7 +105,7 @@ Follow-up audit (2026-11-19): findings 35–38 are fixed and independently verif
 
 Further audit (2026-11-19) opened findings 39–41 for incomplete mount information, mount resolution cost, and the statx fallback test. They are fixed and verified. See AUDIT.md.
 
-Xe and descriptor hardening (2026-11-19): findings 25–41 are committed as htop `1c205705` (patch 0017) and packaged as htop-gpu 3.5.3-18 (built and checked, not yet installed; installed is still 3.5.3-17). Committed locally, not pushed.
+Xe and descriptor hardening (2026-11-19): findings 25–41 are committed as htop `1c205705` (patch 0017) and packaged as htop-gpu 3.5.3-18, installed and pushed on 2026-11-19.
 
 In progress: nobody.
 

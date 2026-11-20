@@ -9,7 +9,7 @@ to know lives in this folder, never only in one agent's private memory.
 A personal custom build of htop 3.5.3 with header meters for AMD dedicated cards
 (RDNA 2, 3 and 4: RX 6000, 7000 and 9000; developed and tested on an RX 9070 XT,
 the others only against fake sysfs trees; htop `f842f486`, `7c2fe84b`, `943464c0`, `c3a0d73c`, `1c205705`;
-packaged as 3.5.3-18, installed 3.5.3-17):
+installed as 3.5.3-18):
 GPU usage, VRAM, power, edge/junction/memory temperatures, GPU clock, VRAM clock,
 video engine. Not meant for upstream htop, but kept as close to upstream as
 possible so new htop releases are easy to rebase onto.
@@ -34,7 +34,7 @@ Discrete Intel graphics, including DG1 and Arc, and earlier integrated families
 are excluded. This machine's `8086:7d67` is tested on both `i915` and `xe`.
 The other families are covered by fake sysfs/fdinfo tests. See
 AUDIT.md (findings 20-26).
-htop `1c205705` (patch 0017, package 3.5.3-18, built but not installed) adds the
+htop `1c205705` (patch 0017, installed as 3.5.3-18) adds the
 xe runtime-PM read spacing, the GPU% xe skip, and descriptor identification that
 never queries network or FUSE filesystems (AUDIT.md findings 25-41).
 

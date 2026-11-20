@@ -10,14 +10,14 @@ Findings 17-19 (P2/P3, AMD runtime power state, upstream checker, display-mode d
 Findings 20-22 (P2/P3, Xe timestamp stalls, compute-only Xe, live Vulkan device) are fixed and verified (htop `c3a0d73c`, installed in 3.5.3-17 on 2026-11-19).
 Finding 23 (P2, generic-only fdinfo on a matched Intel GPU descriptor produces false zeros) is fixed and verified (htop `c3a0d73c`, 3.5.3-17).
 Finding 24 (P3, an O_PATH handle on the iGPU node makes usage and video N/A after the finding 23 fix; Claude Code, 2026-11-19) is fixed and verified (htop `c3a0d73c`, 3.5.3-17).
-Findings 25-26 (P3, first live xe run on 2026-11-19: refreshes faster than xe's 1 s autosuspend keep an idle iGPU awake; the live graphics check fails on Mesa's xe warning) are fixed and verified in htop `1c205705` (3.5.3-18). Independently re-verified live on xe by Claude Code.
-Finding 27 (P3, Intel meters showed N/A during runtime resume) is fixed and verified in htop `1c205705` (3.5.3-18). Independently re-verified live on xe by Claude Code.
-Finding 28 (P3, fast Xe polling could keep the iGPU awake during autosuspend timer slack) is fixed and verified in htop `1c205705` (3.5.3-18).
-Findings 29–31 are fixed and verified in htop `1c205705` (3.5.3-18). They cover the GPU% process reader, forced-on Xe power policy, and detection of hardware reads during cached refreshes. Findings 28–31 independently re-verified live on xe by Claude Code.
-Finding 32 (P3, `stat()` through `/proc/<pid>/fd/N` reaches each descriptor's own filesystem, so a hung network or FUSE mount could block htop; in the Intel sampler since the start, and now in the GPU% path) is fixed and verified in htop `1c205705` (3.5.3-18, Claude Code).
-Findings 33–34 (alternate DRM node paths and optional syscall support) are fixed and verified in htop `1c205705` (3.5.3-18, Claude Code).
-The original 33–34 reproductions also pass independently. Findings 35–38 from the follow-up audit are fixed and verified in htop `1c205705` (3.5.3-18, Claude Code).
-Independent retesting confirmed fixes 35–38. Findings 39–41 are fixed and verified in htop `1c205705` (3.5.3-18, Claude Code).
+Findings 25-26 (P3, first live xe run on 2026-11-19: refreshes faster than xe's 1 s autosuspend keep an idle iGPU awake; the live graphics check fails on Mesa's xe warning) are fixed and verified in htop `1c205705` (installed in 3.5.3-18). Independently re-verified live on xe by Claude Code.
+Finding 27 (P3, Intel meters showed N/A during runtime resume) is fixed and verified in htop `1c205705` (installed in 3.5.3-18). Independently re-verified live on xe by Claude Code.
+Finding 28 (P3, fast Xe polling could keep the iGPU awake during autosuspend timer slack) is fixed and verified in htop `1c205705` (installed in 3.5.3-18).
+Findings 29–31 are fixed and verified in htop `1c205705` (installed in 3.5.3-18). They cover the GPU% process reader, forced-on Xe power policy, and detection of hardware reads during cached refreshes. Findings 28–31 independently re-verified live on xe by Claude Code.
+Finding 32 (P3, `stat()` through `/proc/<pid>/fd/N` reaches each descriptor's own filesystem, so a hung network or FUSE mount could block htop; in the Intel sampler since the start, and now in the GPU% path) is fixed and verified in htop `1c205705` (installed in 3.5.3-18, Claude Code).
+Findings 33–34 (alternate DRM node paths and optional syscall support) are fixed and verified in htop `1c205705` (installed in 3.5.3-18, Claude Code).
+The original 33–34 reproductions also pass independently. Findings 35–38 from the follow-up audit are fixed and verified in htop `1c205705` (installed in 3.5.3-18, Claude Code).
+Independent retesting confirmed fixes 35–38. Findings 39–41 are fixed and verified in htop `1c205705` (installed in 3.5.3-18, Claude Code).
 P2 means normal priority; P3 means low priority.
 
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — fixes for findings 39–41

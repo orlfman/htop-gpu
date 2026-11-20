@@ -3,6 +3,15 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-11-19, Claude Code (Claude Opus 5.5) — push and install 3.5.3-18
+
+At the user's request.
+
+- Push: `src/htop` `amdgpu-meters` `c3a0d73c..1c205705` to orlfman/htop (private), and this repo's `main` `934c2a6..17828d0` to orlfman/htop-gpu (public), followed by this record commit. Both were fast-forwards, no force push. Before pushing to the public repo I scanned the new commit for emails, tokens and keys and found none.
+- Install: the user ran `sudo pacman -U` in the Terminal panel. `pacman -Q`: htop-gpu 3.5.3-18. `htop-gpu --version`: 3.5.3-18-gpu. The installed binary is identical to the package's, and `pacman -Qkk` shows 0 altered files.
+- Live check, still booted on xe, with a copy of the user's htop-gpurc during an `h264_vaapi` encode: heading `Intel iGPU`, usage 0%, clock 2000MHz, mem 85.6M, Vid 33% E/D, and the `Radeon RX 9070 XT` heading present. The user's config hash was unchanged.
+- Updated the PLAN.md status, AGENTS.md and the AUDIT.md status lines to installed.
+
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — commit and package 3.5.3-18
 
 At the user's request; not pushed, not installed.
