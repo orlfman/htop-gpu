@@ -19,9 +19,9 @@ Findings 33–34 (alternate DRM node paths and optional syscall support) are fix
 The original 33–34 reproductions also pass independently. Findings 35–38 from the follow-up audit are fixed and verified in htop `1c205705` (installed in 3.5.3-18, Claude Code).
 Independent retesting confirmed fixes 35–38. Findings 39–41 are fixed and verified in htop `1c205705` (installed in 3.5.3-18, Claude Code).
 Independent retesting confirmed the original cases for findings 39–41 in 3.5.3-18. Finding 42 is open. Findings 43–47 (CPU package power; Claude Code) and 48–50 (Codex) are fixed and verified in htop `cf48f0a7`, and the GPU meters' pause fix in `e33c31ec` (installed in 3.5.3-19 on 2026-11-19).
-Finding 51 (P3, heading captions sampled the GPU on every redraw because of the shared meter clock in `e33c31ec`) is fixed and verified in htop `5cf3324f` (packaged as 3.5.3-20, Claude Code).
+Finding 51 (P3, heading captions sampled the GPU on every redraw because of the shared meter clock in `e33c31ec`) is fixed and verified in htop `5cf3324f` (installed in 3.5.3-20, Claude Code).
 Finding 52 (P3, the redraw regression test accepts an unsuccessful process exit) is open.
-Finding 52 (P3, the redraw regression accepted an unsuccessful exit and covered Radeon only) is fixed and verified in this repo's `tools/test-headings.py` (3.5.3-20, Claude Code).
+Finding 52 (P3, the redraw regression accepted an unsuccessful exit and covered Radeon only) is fixed and verified in this repo's `tools/test-headings.py` (installed release 3.5.3-20, Claude Code).
 P2 means normal priority; P3 means low priority.
 
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — fix for finding 52

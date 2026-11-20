@@ -3,6 +3,14 @@
 Newest first. One entry per agent session: date, agent, what changed, check
 results, anything left half done, what's next. See `AGENTS.md` for the rules.
 
+## 2026-11-19, Claude Code (Claude Opus 5.5) — push and install 3.5.3-20
+
+At the user's request.
+
+- Push: `src/htop` `amdgpu-meters` `e33c31ec..342dcaf9` (`5cf3324f`, `342dcaf9`) to orlfman/htop (private), and `main` `b7272d8..f03c280` to orlfman/htop-gpu (public), followed by this record commit. All were fast-forwards. I scanned the new commits for emails, tokens and keys before pushing and found none.
+- Install: the user ran `sudo pacman -U` in the Terminal panel. `pacman -Q`: htop-gpu 3.5.3-20. `--version`: 3.5.3-20-gpu. The installed binary is identical to the package's, and `pacman -Qkk` shows 0 altered files.
+- Live, still on xe, with a copy of the user's config: `Arrow Lake-S [Intel Graphics]: sleep`, the CPU and Radeon headings, and `Pwr` at 9.1W/250W. The user's config hash was unchanged.
+
 ## 2026-11-19, Claude Code (Claude Opus 5.5) — commit and package 3.5.3-20
 
 At the user's request; not pushed, not installed.

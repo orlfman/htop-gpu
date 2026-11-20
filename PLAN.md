@@ -111,7 +111,7 @@ Independent verification (2026-11-19): the original 39–41 cases pass in 3.5.3-
 
 [AMD CPU package power](PLAN-AMD-CPU-POWER.md) is committed as htop `cf48f0a7` (patch 0018) and installed and pushed as htop-gpu 3.5.3-19 on 2026-11-19, with the paused-meter fix for the GPU meters in `e33c31ec` (patch 0019). The original cases for findings 43–47 passed independent retesting. Follow-up findings 48–50 are fixed and verified. Simulated AMD meter checks and the live Intel MSR and MMIO checks passed. AMD hardware validation is pending. See [AUDIT.md](AUDIT.md).
 
-Intel iGPU model heading and redraw fix (2026-11-19): htop `5cf3324f` (finding 51: captions use `*_lastSample()`, so redraws between refreshes read nothing) and `342dcaf9` (the iGPU heading shows its `pci.ids` model) are packaged as htop-gpu 3.5.3-20, built but not yet installed; patches 0020 and 0021. See AUDIT.md (findings 51–52).
+Intel iGPU model heading and redraw fix (2026-11-19): htop `5cf3324f` (finding 51: captions use `*_lastSample()`, so redraws between refreshes read nothing) and `342dcaf9` (the iGPU heading shows its `pci.ids` model) are installed and pushed as htop-gpu 3.5.3-20 (2026-11-19); patches 0020 and 0021. See AUDIT.md (findings 51–52).
 
 In progress: nobody.
 
